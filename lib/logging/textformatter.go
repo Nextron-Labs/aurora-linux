@@ -3,6 +3,7 @@ package logging
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,9 +39,29 @@ func (f *TextFormatter) Format(entry *log.Entry) ([]byte, error) {
 
 	for _, k := range keys {
 		v := entry.Data[k]
-		b.WriteString(fmt.Sprintf(" %s=%v", k, v))
+		b.WriteString(fmt.Sprintf(" %s=%s", formatTextFieldKey(k), formatTextFieldValue(v)))
 	}
 	b.WriteString("\n")
 
 	return []byte(b.String()), nil
+}
+
+func formatTextFieldKey(k string) string {
+	for _, r := range k {
+		if r < 0x20 || r == 0x7f || r == ' ' || r == '=' {
+			return strconv.Quote(k)
+		}
+	}
+	return k
+}
+
+func formatTextFieldValue(v interface{}) string {
+	switch x := v.(type) {
+	case string:
+		return strconv.Quote(x)
+	case fmt.Stringer:
+		return strconv.Quote(x.String())
+	default:
+		return fmt.Sprint(v)
+	}
 }

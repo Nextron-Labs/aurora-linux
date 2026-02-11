@@ -7,6 +7,10 @@ patterns established by the Windows-based Aurora agent (ETW + Sigma) but is an
 entirely separate codebase — no code is shared or imported from the Windows
 version.
 
+> Status note (2026-02-11): this document started as an implementation plan and
+> contains historical design options. For current behavior and operational
+> details, treat `README.md` and `docs/DEVELOPER.md` as source of truth.
+
 ---
 
 ## Table of Contents
@@ -58,16 +62,15 @@ version.
                          │
 ┌────────────────────────▼─────────────────────────────┐
 │  Sigma Engine (SigmaConsumer)                        │
-│  • Loads rules via go-sigma/v2                       │
-│  • Routes events by log source YAML config           │
+│  • Loads rules via go-sigma-rule-engine              │
+│  • Evaluates ruleset against normalized events       │
 │  • Evaluates detection logic                         │
 │  • Throttles duplicate matches                       │
 └────────────────────────┬─────────────────────────────┘
                          │
 ┌────────────────────────▼─────────────────────────────┐
 │  Output Sinks                                        │
-│  • Log file (JSON or text, with rotation)            │
-│  • Syslog (UDP/TCP)                                  │
+│  • Log file (JSON or text)                           │
 │  • Stdout (for debugging / container use)            │
 │  • (future: webhook, SIEM forwarding)                │
 └──────────────────────────────────────────────────────┘
@@ -190,19 +193,18 @@ type DataFieldsMap map[string]fmt.Stringer
 | Dependency | Purpose |
 |---|---|
 | `github.com/cilium/ebpf` (v0.12+) | Pure-Go eBPF: load BPF programs, read ring buffer, manage maps. No CGO. CO-RE via BTF. Used in Cilium, Tetragon, Falco. |
-| `github.com/NextronSystems/go-sigma/v2` | Sigma rule parsing and matching. Same library used by Windows Aurora. |
-| `github.com/sirupsen/logrus` | Structured logging with hooks for multi-target output (file, syslog, stdout). |
+| `github.com/markuskont/go-sigma-rule-engine` | Sigma rule parsing and matching (public dependency). |
+| `github.com/sirupsen/logrus` | Structured logging to JSON/text output sinks. |
 | `github.com/spf13/cobra` | CLI framework for command-line flags and subcommands. |
-| `github.com/shirou/gopsutil/v3` | Process info fallback when /proc reads fail (exe path, cmdline). |
-| `github.com/hashicorp/golang-lru` | LRU cache for UID→username mapping and parent process correlation. |
+| `github.com/hashicorp/golang-lru/v2` | LRU cache for UID→username mapping and parent process correlation. |
 | `golang.org/x/time/rate` | Rate limiter for Sigma match throttling (per-rule burst control). |
 
 ### 1.5 Log Source Configuration
 
-Sigma rules declare a `logsource` with `category` and `product`. Aurora Linux
-routes rules to the correct provider via two YAML config files, using the same
-schema as Windows Aurora's ETW log source files so the go-sigma loader works
-without modification.
+The repository includes `resources/log-sources/*.yml` files for compatibility
+with earlier Aurora mapping concepts. In the current implementation they are
+not consumed by the runtime Sigma path, which loads rules directly from
+directories.
 
 **`resources/log-sources/ebpf-log-sources.yml`** — maps service names to
 provider source strings:
@@ -448,7 +450,6 @@ reconstructs the full set of Sigma-facing fields:
 - **Primary**: Look up in the correlation cache first. If we previously
   processed the parent's own exec event, its Image is cached.
 - **Fallback**: `os.Readlink("/proc/<PPID>/exe")`
-- **Last resort**: `gopsutil process.NewProcess(ppid).Exe()`
 
 #### ParentCommandLine
 
@@ -493,7 +494,7 @@ reconstructs the full set of Sigma-facing fields:
 |---|---|---|---|---|
 | 1 | `Image` | `/proc/PID/exe` symlink; fallback: BPF `filename` | `"Image"` | `/usr/bin/base64` |
 | 2 | `CommandLine` | `/proc/PID/cmdline`, NUL bytes replaced with spaces | `"CommandLine"` | `base64 -d /tmp/payload.b64` |
-| 3 | `ParentImage` | Correlation cache → `/proc/PPID/exe` → gopsutil fallback | `"ParentImage"` | `/bin/bash` |
+| 3 | `ParentImage` | Correlation cache → `/proc/PPID/exe` fallback | `"ParentImage"` | `/bin/bash` |
 | 4 | `ParentCommandLine` | Correlation cache → `/proc/PPID/cmdline` | `"ParentCommandLine"` | `bash -c ./exploit.sh` |
 | 5 | `User` | BPF `uid` → `os/user.LookupId()` | `"User"` | `root` |
 | 6 | `LogonId` | `/proc/PID/loginuid` (audit auid) | `"LogonId"` | `0` |
@@ -1663,8 +1664,8 @@ event and increments the lost counter. The kernel is **never blocked or slowed**
 | Correlation cache size | 16,384 entries | LRU. Covers ~16K concurrent processes. Typical server has 200-2,000. |
 | UID cache size | 256 entries | Most systems have < 50 unique UIDs performing execs. |
 
-Buffer size is configurable via `--ringbuf-size` flag (in pages, must be
-power of 2).
+`--ringbuf-size` is currently an informational CLI flag and is not yet wired
+to runtime BPF map sizing.
 
 ### 6.3 Truncation Policy
 
@@ -1699,10 +1700,12 @@ After=network.target
 
 [Service]
 Type=simple
+Environment=AURORA_RULES_DIR=/opt/aurora-linux/sigma-rules/rules/linux
+Environment=AURORA_LOG_FILE=/var/log/aurora-linux/aurora.log
+EnvironmentFile=-/opt/aurora-linux/config/aurora-linux.env
 ExecStart=/opt/aurora-linux/aurora-linux \
-    --rules /opt/aurora-linux/sigma-rules/ \
-    --log-sources /opt/aurora-linux/log-sources/ \
-    --logfile /var/log/aurora-linux/aurora.log \
+    --rules ${AURORA_RULES_DIR} \
+    --logfile ${AURORA_LOG_FILE} \
     --json
 Restart=on-failure
 RestartSec=5
@@ -1906,8 +1909,8 @@ network_connection Sigma rules (crypto mining, ngrok, localtonet).
 | 9 | Implement enricher + correlator | `lib/distributor/enricher.go`, `lib/enrichment/correlator.go` | LRU parent cache, ManipulatorFunc registry |
 | 10 | Implement Sigma consumer | `lib/consumer/sigma/sigmaconsumer.go` | Load rules, wrap events, scan, report matches |
 | 11 | Create log source YAML configs | `resources/log-sources/` | `ebpf-log-sources.yml` + `ebpf-log-source-mappings.yml` |
-| 12 | Implement CLI with cobra | `cmd/aurora-linux/main.go` | Flags: `--rules`, `--log-sources`, `--logfile`, `--json`, `--ringbuf-size` |
-| 13 | Implement JSON + text log formatters | `lib/logging/` | logrus hooks for file rotation, syslog |
+| 12 | Implement CLI with cobra | `cmd/aurora-linux/main.go` | Flags: `--rules`, `--logfile`, `--json`, `--ringbuf-size` |
+| 13 | Implement JSON + text log formatters | `lib/logging/` | Logrus formatters for JSON and human-readable text output |
 | 14 | Write unit tests for field mapping | `lib/provider/ebpf/fieldmap_test.go` | See Section 5.1 |
 | 15 | Write integration tests | `lib/provider/ebpf/integration_test.go` | See Section 5.2 |
 | 16 | Build replay provider | `lib/provider/replay/` | For CI without BPF |

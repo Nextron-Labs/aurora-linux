@@ -2,6 +2,7 @@ package enrichment
 
 import (
 	"testing"
+	"time"
 )
 
 func TestDataFieldsMapValue(t *testing.T) {
@@ -78,5 +79,26 @@ func TestEventEnricher(t *testing.T) {
 	v := fields.Value("Enriched")
 	if !v.Valid || v.String != "yes" {
 		t.Errorf("Enriched = %v, want yes", v)
+	}
+}
+
+func TestEventEnricherAllowsRegisterDuringEnrich(t *testing.T) {
+	enricher := NewEventEnricher()
+	enricher.Register("TestProvider:1", func(fields DataFieldsMap) {
+		// Registering from inside an active Enrich call used to deadlock
+		// when callbacks ran under the read lock.
+		enricher.Register("TestProvider:1", func(DataFieldsMap) {})
+	})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		enricher.Enrich("TestProvider:1", make(DataFieldsMap))
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Enrich() appears deadlocked while registering a manipulator")
 	}
 }

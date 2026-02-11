@@ -2,6 +2,9 @@ package agent
 
 // Parameters holds all configuration options for the agent.
 type Parameters struct {
+	// Version is the Aurora Linux version displayed in startup output.
+	Version string
+
 	// RuleDirs contains directories with Sigma YAML rules.
 	RuleDirs []string
 
@@ -33,6 +36,7 @@ type Parameters struct {
 // DefaultParameters returns parameters with sensible defaults.
 func DefaultParameters() Parameters {
 	return Parameters{
+		Version:              "dev",
 		RingBufSizePages:     2048, // 8 MB
 		CorrelationCacheSize: 16384,
 		ThrottleRate:         1.0,

@@ -35,7 +35,9 @@ aurora-linux/
 │   ├── main.go                  Cobra root command, flag definitions
 │   └── agent/
 │       ├── agent.go             Agent lifecycle: init → collect → shutdown
-│       └── parameters.go        Configuration struct + defaults
+│       ├── parameters.go        Configuration struct + defaults
+│       ├── validate.go          Startup parameter validation (user-facing errors)
+│       └── *_test.go            Agent lifecycle + validation tests
 ├── lib/
 │   ├── provider/
 │   │   ├── provider.go          EventProvider + Event interfaces
@@ -53,10 +55,12 @@ aurora-linux/
 │   │   │   ├── procfs.go        /proc/PID/* helpers
 │   │   │   └── usercache.go     UID→username LRU cache
 │   │   └── replay/
-│   │       └── replay.go        JSONL replay provider (for CI without BPF)
+│   │       ├── replay.go        JSONL replay provider (for CI without BPF)
+│   │       └── replay_test.go   Replay parsing/filtering/close tests
 │   ├── distributor/
 │   │   ├── distributor.go       Event routing + enrichment dispatch
-│   │   └── enrichments.go       Linux-specific enrichment registrations
+│   │   ├── enrichments.go       Linux-specific enrichment registrations
+│   │   └── *_test.go            Concurrency + enrichment tests
 │   ├── enrichment/
 │   │   ├── enricher.go          DataFields, DataFieldsMap, EventEnricher
 │   │   ├── enricher_test.go
@@ -64,10 +68,12 @@ aurora-linux/
 │   │   └── correlator_test.go
 │   ├── consumer/sigma/
 │   │   ├── sigmaconsumer.go     Sigma rule loading + evaluation + throttling
-│   │   └── loadrules.go         YAML file helpers
+│   │   ├── loadrules.go         YAML file helpers
+│   │   └── sigmaconsumer_test.go
 │   └── logging/
 │       ├── jsonformatter.go     JSON log output (for SIEM ingestion)
-│       └── textformatter.go     Human-readable log output
+│       ├── textformatter.go     Human-readable log output
+│       └── textformatter_test.go
 ├── resources/log-sources/
 │   ├── ebpf-log-sources.yml             Service→provider source mapping
 │   └── ebpf-log-source-mappings.yml     Sigma category→service mapping
@@ -296,16 +302,21 @@ should be committed so that subsequent `go build` works without clang.
 ### CLI flags
 
 ```
---rules         Sigma rule directories (repeatable)
+--rules         Sigma rule directories (repeatable, required)
 --logfile       Output log file path (default: stdout)
 --json          JSON output format
---ringbuf-size  Ring buffer pages (default: 2048 = 8MB)
+--ringbuf-size  Ring buffer pages (default: 2048 = 8MB, currently informational)
 --correlation-cache  LRU cache entries (default: 16384)
---throttle-rate      Max matches/rule/sec (default: 1.0)
---throttle-burst     Burst per rule (default: 5)
+--throttle-rate      Max matches/rule/sec (default: 1.0, 0 disables throttling)
+--throttle-burst     Burst per rule (default: 5, used when throttling enabled)
 --verbose, -v        Debug logging
 --stats-interval     Stats log interval in seconds (default: 60)
 ```
+
+Startup validation fails fast with actionable errors when:
+- `--rules` is missing, empty, or contains non-directory paths.
+- numeric flags are out of range (e.g., non-power-of-two `--ringbuf-size`).
+- `--logfile` points to a path whose parent directory does not exist.
 
 ---
 
@@ -316,8 +327,15 @@ should be committed so that subsequent `go build` works without clang.
 | Test file | What it covers |
 |-----------|---------------|
 | `lib/provider/ebpf/fieldmap_test.go` | `joinCmdline` (NUL→space, truncation), `nullTermStr`, `buildExecFieldsMap`, `buildFileFieldsMap`, `buildNetFieldsMap`, `formatIPv4` |
+| `lib/provider/ebpf/listener_test.go` | Partial-init behavior (disable failed monitors, fail when all fail) |
+| `lib/provider/replay/replay_test.go` | Source filtering, numeric parsing, large-line handling, close semantics, concurrent AddSource+SendEvents |
+| `lib/distributor/distributor_test.go` | Consumer snapshot behavior; registration not blocked by in-flight callback |
+| `lib/distributor/enrichments_test.go` | Invalid PID handling in enrichment functions |
 | `lib/enrichment/enricher_test.go` | `DataFieldsMap.Value`, `ForEach`, `RenameField`, `EventEnricher.Register`+`Enrich` |
 | `lib/enrichment/correlator_test.go` | `Correlator.Store`+`Lookup`, cache miss, LRU eviction |
+| `lib/consumer/sigma/sigmaconsumer_test.go` | Throttle behavior, invalid-rule-dir behavior, field collision handling, redaction, rule-level lookup benchmark |
+| `lib/logging/textformatter_test.go` | Text formatter escaping of keys/values to prevent log injection |
+| `cmd/aurora-linux/agent/*_test.go` | Startup validation + secure logfile open/close behavior |
 
 ### Integration tests (NOT YET WRITTEN, require Linux + root)
 
@@ -396,10 +414,11 @@ log source routing). This is a gap -- see "What needs work" below.
 - Field reconstruction from /proc is complete for all fields.
 - Parent process correlation via LRU cache is implemented.
 - Sigma consumer loads rules, evaluates events, throttles matches.
-- CLI with cobra is functional with all configuration flags.
+- CLI validates user input and fails fast with actionable errors.
+- CLI with cobra is functional with examples and required `--rules`.
 - systemd service file is ready.
 - Replay provider exists for testing without BPF.
-- JSON and text log formatters work.
+- JSON and text log formatters work; text output escapes untrusted fields.
 
 ---
 
@@ -461,7 +480,8 @@ The `--ringbuf-size` CLI flag exists but is not actually passed to the BPF
 programs. The ring buffer sizes are hardcoded in the C sources (`8 * 1024 * 1024`
 for exec, `4 * 1024 * 1024` for file/net). To make this configurable, the
 listener would need to use `cilium/ebpf.CollectionOptions` to override map
-sizes at load time.
+sizes at load time. The current CLI/help text marks this flag as informational
+to reduce operator confusion.
 
 ### P6: File event watched_dirs population
 

@@ -92,8 +92,10 @@ func (e *EventEnricher) Register(key string, fn ManipulatorFunc) {
 // Enrich applies all registered manipulators for the given key to the fields.
 func (e *EventEnricher) Enrich(key string, fields DataFieldsMap) {
 	e.mu.RLock()
-	defer e.mu.RUnlock()
-	for _, fn := range e.manipulators[key] {
+	manipulators := append([]ManipulatorFunc(nil), e.manipulators[key]...)
+	e.mu.RUnlock()
+
+	for _, fn := range manipulators {
 		fn(fields)
 	}
 }

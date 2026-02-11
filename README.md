@@ -51,13 +51,16 @@ go build -o aurora-linux ./cmd/aurora-linux/
 ### Run
 
 ```bash
-# Point at your Sigma rules directory and run
+# Point at one or more Sigma rules directories and run
 sudo ./aurora-linux \
     --rules /path/to/sigma/rules/linux/process_creation/ \
     --rules /path/to/sigma/rules/linux/file_event/ \
     --rules /path/to/sigma/rules/linux/network_connection/ \
     --json
 ```
+
+`--rules` is required. Aurora validates rule directories at startup and exits
+with an actionable error if the paths are missing or invalid.
 
 ### Deploy as a Service
 
@@ -95,12 +98,16 @@ When a Sigma rule matches, Aurora Linux emits a structured alert:
 | `--rules` | (required) | Sigma rule directories (repeatable) |
 | `--logfile` | stdout | Output log file path |
 | `--json` | off | JSON output format |
-| `--ringbuf-size` | 2048 | Ring buffer size in pages (8 MB) |
+| `--ringbuf-size` | 2048 | Ring buffer size in pages (currently informational; runtime tuning planned) |
 | `--correlation-cache` | 16384 | Parent process LRU cache entries |
-| `--throttle-rate` | 1.0 | Max Sigma matches per rule per second |
-| `--throttle-burst` | 5 | Burst allowance per rule |
+| `--throttle-rate` | 1.0 | Max Sigma matches per rule per second (`0` disables throttling) |
+| `--throttle-burst` | 5 | Burst allowance per rule (used when throttling is enabled) |
 | `--stats-interval` | 60 | Stats logging interval (seconds, 0=off) |
 | `-v, --verbose` | off | Debug-level logging |
+
+Operational notes:
+- If `--logfile` is set and cannot be opened safely, startup fails instead of silently falling back to stdout.
+- Text and JSON alert logs preserve reserved Sigma metadata fields and redact common secret/token patterns in logged fields.
 
 ## Architecture
 
@@ -130,7 +137,7 @@ aurora-linux/
 │   ├── enrichment/            DataFieldsMap, correlator cache
 │   ├── consumer/sigma/        Sigma rule evaluation
 │   └── logging/               JSON + text formatters
-├── resources/log-sources/     Sigma category→provider mappings
+├── resources/log-sources/     Legacy Sigma category→provider mapping files (not currently consumed by runtime)
 ├── deploy/                    systemd unit file
 └── docs/                      Design plan + developer guide
 ```

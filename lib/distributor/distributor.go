@@ -3,6 +3,7 @@ package distributor
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/nicholasgasior/aurora-linux/lib/enrichment"
 	"github.com/nicholasgasior/aurora-linux/lib/provider"
@@ -20,12 +21,12 @@ type EventConsumer interface {
 // Distributor receives events from providers, applies enrichment, and
 // forwards them to registered consumers.
 type Distributor struct {
-	mu        sync.RWMutex
-	enricher  *enrichment.EventEnricher
-	consumers []EventConsumer
+	mu         sync.RWMutex
+	enricher   *enrichment.EventEnricher
+	consumers  []EventConsumer
 	correlator *enrichment.Correlator
 
-	processed uint64
+	processed atomic.Uint64
 }
 
 // New creates a new Distributor with the given enricher and correlator.
@@ -46,20 +47,23 @@ func (d *Distributor) RegisterConsumer(c EventConsumer) {
 // HandleEvent is the callback passed to providers. It enriches the event
 // and forwards it to all consumers.
 func (d *Distributor) HandleEvent(event provider.Event) {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
+	consumers := d.snapshotConsumers()
 
 	// Apply enrichments based on provider + event ID
 	key := enrichmentKey(event.ID())
-	if fields, ok := event.(interface{ Fields() enrichment.DataFieldsMap }); ok {
-		d.enricher.Enrich(key, fields.Fields())
+	if d.enricher != nil {
+		if fields, ok := event.(interface {
+			Fields() enrichment.DataFieldsMap
+		}); ok {
+			d.enricher.Enrich(key, fields.Fields())
+		}
 	}
 
 	// Cache process data for correlation
 	d.cacheProcessData(event)
 
 	// Forward to all consumers
-	for _, c := range d.consumers {
+	for _, c := range consumers {
 		if err := c.HandleEvent(event); err != nil {
 			log.WithFields(log.Fields{
 				"consumer": c.Name(),
@@ -68,7 +72,13 @@ func (d *Distributor) HandleEvent(event provider.Event) {
 		}
 	}
 
-	d.processed++
+	d.processed.Add(1)
+}
+
+func (d *Distributor) snapshotConsumers() []EventConsumer {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return append([]EventConsumer(nil), d.consumers...)
 }
 
 // cacheProcessData stores process info for parent correlation on process_creation events.
@@ -94,7 +104,7 @@ func (d *Distributor) cacheProcessData(event provider.Event) {
 
 // Processed returns the number of events processed.
 func (d *Distributor) Processed() uint64 {
-	return d.processed
+	return d.processed.Load()
 }
 
 // Correlator returns the correlator for use by enrichment functions.

@@ -1,6 +1,7 @@
 package ebpf
 
 import (
+	"net/netip"
 	"strconv"
 	"strings"
 
@@ -119,55 +120,5 @@ func formatIPv4(addr [16]byte) string {
 
 // formatIPv6 formats a 16-byte IPv6 address as a string.
 func formatIPv6(addr [16]byte) string {
-	// Use net.IP for proper formatting with zero compression
-	ip := make([]byte, 16)
-	copy(ip, addr[:])
-
-	// Manual formatting to avoid net package dependency in hot path
-	// Format as 8 groups of 4 hex digits, then compress
-	groups := make([]string, 8)
-	for i := 0; i < 8; i++ {
-		groups[i] = strconv.FormatUint(uint64(addr[i*2])<<8|uint64(addr[i*2+1]), 16)
-	}
-
-	// Find longest run of zero groups for :: compression
-	bestStart, bestLen := -1, 0
-	curStart, curLen := -1, 0
-	for i, g := range groups {
-		if g == "0" {
-			if curStart == -1 {
-				curStart = i
-				curLen = 1
-			} else {
-				curLen++
-			}
-		} else {
-			if curLen > bestLen {
-				bestStart = curStart
-				bestLen = curLen
-			}
-			curStart = -1
-			curLen = 0
-		}
-	}
-	if curLen > bestLen {
-		bestStart = curStart
-		bestLen = curLen
-	}
-
-	if bestLen < 2 {
-		return strings.Join(groups, ":")
-	}
-
-	var parts []string
-	if bestStart == 0 {
-		parts = append(parts, "")
-	}
-	parts = append(parts, strings.Join(groups[:bestStart], ":"))
-	parts = append(parts, strings.Join(groups[bestStart+bestLen:], ":"))
-	if bestStart+bestLen == 8 {
-		parts = append(parts, "")
-	}
-
-	return strings.Join(parts, "::")
+	return netip.AddrFrom16(addr).String()
 }

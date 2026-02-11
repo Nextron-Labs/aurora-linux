@@ -2,7 +2,10 @@ package sigma
 
 import (
 	"fmt"
+	"regexp"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	sigma "github.com/markuskont/go-sigma-rule-engine"
@@ -15,11 +18,13 @@ import (
 type SigmaConsumer struct {
 	mu sync.RWMutex
 
-	ruleset *sigma.Ruleset
+	ruleset    *sigma.Ruleset
+	ruleLevels map[string]string
 
 	// Throttling: per-rule rate limiter to prevent duplicate spam
-	throttles    map[string]*rate.Limiter
-	throttleMu   sync.Mutex
+	throttles     map[string]*rate.Limiter
+	throttleMu    sync.Mutex
+	throttleOn    bool
 	throttleRate  rate.Limit // matches per second
 	throttleBurst int
 
@@ -27,8 +32,16 @@ type SigmaConsumer struct {
 	logger *log.Logger
 
 	// Stats
-	matches uint64
+	matches atomic.Uint64
 }
+
+var (
+	sensitiveValueFieldNames = []string{
+		"password", "passwd", "secret", "token", "api_key", "apikey",
+	}
+	cmdlineInlineSecretPattern = regexp.MustCompile(`(?i)(password|passwd|pwd|token|secret|api[_-]?key)(\s*[:=]\s*)([^\s"'` + "`" + `]+)`)
+	cmdlineFlagSecretPattern   = regexp.MustCompile(`(?i)(--?(?:password|passwd|pwd|token|secret|api[_-]?key))(?:\s+|=)([^\s"'` + "`" + `]+)`)
+)
 
 // Config holds configuration for the Sigma consumer.
 type Config struct {
@@ -40,10 +53,8 @@ type Config struct {
 
 // New creates a new SigmaConsumer.
 func New(cfg Config) *SigmaConsumer {
+	throttleOn := cfg.ThrottleRate > 0
 	throttleRate := rate.Limit(cfg.ThrottleRate)
-	if cfg.ThrottleRate <= 0 {
-		throttleRate = rate.Limit(1) // default: 1 match/sec per rule
-	}
 	burst := cfg.ThrottleBurst
 	if burst <= 0 {
 		burst = 5
@@ -51,6 +62,8 @@ func New(cfg Config) *SigmaConsumer {
 
 	return &SigmaConsumer{
 		throttles:     make(map[string]*rate.Limiter),
+		ruleLevels:    make(map[string]string),
+		throttleOn:    throttleOn,
 		throttleRate:  throttleRate,
 		throttleBurst: burst,
 		logger:        cfg.Logger,
@@ -80,6 +93,20 @@ func (s *SigmaConsumer) InitializeWithRules(ruleDirs []string) error {
 	}
 
 	s.ruleset = ruleset
+	s.ruleLevels = make(map[string]string, len(ruleset.Rules))
+	for _, tree := range ruleset.Rules {
+		if tree.Rule == nil || tree.Rule.ID == "" {
+			continue
+		}
+		s.ruleLevels[tree.Rule.ID] = tree.Rule.Level
+	}
+
+	if len(ruleDirs) > 0 && ruleset.Ok == 0 {
+		return fmt.Errorf(
+			"no loadable Sigma rules found in %v (total=%d failed=%d unsupported=%d)",
+			ruleDirs, ruleset.Total, ruleset.Failed, ruleset.Unsupported,
+		)
+	}
 
 	log.WithFields(log.Fields{
 		"total":       ruleset.Total,
@@ -118,7 +145,7 @@ func (s *SigmaConsumer) HandleEvent(event provider.Event) error {
 			continue
 		}
 
-		s.matches++
+		s.matches.Add(1)
 		s.emitMatch(event, result)
 	}
 
@@ -128,6 +155,10 @@ func (s *SigmaConsumer) HandleEvent(event provider.Event) error {
 // allowMatch checks the per-rule rate limiter. Returns true if this match
 // should be emitted.
 func (s *SigmaConsumer) allowMatch(ruleID string) bool {
+	if !s.throttleOn {
+		return true
+	}
+
 	s.throttleMu.Lock()
 	defer s.throttleMu.Unlock()
 
@@ -158,6 +189,14 @@ func (s *SigmaConsumer) emitMatch(event provider.Event, result sigma.Result) {
 
 	// Add all event data fields
 	event.ForEach(func(key, value string) {
+		value = sanitizeFieldForLogging(key, value)
+
+		if _, exists := fields[key]; exists {
+			key = "event_" + key
+			if _, exists := fields[key]; exists {
+				return
+			}
+		}
 		fields[key] = value
 	})
 
@@ -168,22 +207,34 @@ func (s *SigmaConsumer) emitMatch(event provider.Event, result sigma.Result) {
 	}
 }
 
-// lookupRuleLevel finds the level string for a rule by its ID.
-func (s *SigmaConsumer) lookupRuleLevel(ruleID string) string {
-	if s.ruleset == nil {
-		return ""
-	}
-	for _, tree := range s.ruleset.Rules {
-		if tree.Rule != nil && tree.Rule.ID == ruleID {
-			return tree.Rule.Level
+func sanitizeFieldForLogging(key, value string) string {
+	keyLower := strings.ToLower(key)
+	for _, marker := range sensitiveValueFieldNames {
+		if strings.Contains(keyLower, marker) {
+			return "[REDACTED]"
 		}
 	}
-	return ""
+
+	switch key {
+	case "CommandLine", "ParentCommandLine":
+		value = cmdlineInlineSecretPattern.ReplaceAllString(value, `$1$2[REDACTED]`)
+		value = cmdlineFlagSecretPattern.ReplaceAllString(value, `$1 [REDACTED]`)
+	}
+
+	return value
+}
+
+// lookupRuleLevel finds the level string for a rule by its ID.
+func (s *SigmaConsumer) lookupRuleLevel(ruleID string) string {
+	if s.ruleLevels == nil {
+		return ""
+	}
+	return s.ruleLevels[ruleID]
 }
 
 // Matches returns the number of Sigma matches detected.
 func (s *SigmaConsumer) Matches() uint64 {
-	return s.matches
+	return s.matches.Load()
 }
 
 // Close cleans up the consumer.

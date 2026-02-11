@@ -23,6 +23,8 @@ const (
 	SourceProcessExec = "LinuxEBPF:ProcessExec"
 	SourceFileCreate  = "LinuxEBPF:FileCreate"
 	SourceNetConnect  = "LinuxEBPF:NetConnect"
+
+	readErrorBackoff = 100 * time.Millisecond
 )
 
 // Listener implements the EventProvider interface using eBPF tracepoints.
@@ -292,6 +294,10 @@ func (l *Listener) readExecEvents(callback func(event provider.Event)) {
 				return
 			}
 			log.WithError(err).Error("Reading exec ring buffer")
+			if l.closed.Load() {
+				return
+			}
+			time.Sleep(readErrorBackoff)
 			continue
 		}
 
@@ -316,6 +322,10 @@ func (l *Listener) readFileEvents(callback func(event provider.Event)) {
 				return
 			}
 			log.WithError(err).Error("Reading file ring buffer")
+			if l.closed.Load() {
+				return
+			}
+			time.Sleep(readErrorBackoff)
 			continue
 		}
 
@@ -340,6 +350,10 @@ func (l *Listener) readNetEvents(callback func(event provider.Event)) {
 				return
 			}
 			log.WithError(err).Error("Reading net ring buffer")
+			if l.closed.Load() {
+				return
+			}
+			time.Sleep(readErrorBackoff)
 			continue
 		}
 
@@ -584,43 +598,65 @@ func (l *Listener) Close() error {
 		return nil
 	}
 
+	var closeErrs []error
+
 	// Close readers first to unblock Read() calls
 	if l.execReader != nil {
-		l.execReader.Close()
+		if err := l.execReader.Close(); err != nil {
+			closeErrs = append(closeErrs, fmt.Errorf("closing exec reader: %w", err))
+		}
 	}
 	if l.fileReader != nil {
-		l.fileReader.Close()
+		if err := l.fileReader.Close(); err != nil {
+			closeErrs = append(closeErrs, fmt.Errorf("closing file reader: %w", err))
+		}
 	}
 	if l.netReader != nil {
-		l.netReader.Close()
+		if err := l.netReader.Close(); err != nil {
+			closeErrs = append(closeErrs, fmt.Errorf("closing net reader: %w", err))
+		}
 	}
 
 	// Detach tracepoints
 	if l.execLink != nil {
-		l.execLink.Close()
+		if err := l.execLink.Close(); err != nil {
+			closeErrs = append(closeErrs, fmt.Errorf("closing exec link: %w", err))
+		}
 	}
 	if l.fileEnter != nil {
-		l.fileEnter.Close()
+		if err := l.fileEnter.Close(); err != nil {
+			closeErrs = append(closeErrs, fmt.Errorf("closing file enter link: %w", err))
+		}
 	}
 	if l.fileExit != nil {
-		l.fileExit.Close()
+		if err := l.fileExit.Close(); err != nil {
+			closeErrs = append(closeErrs, fmt.Errorf("closing file exit link: %w", err))
+		}
 	}
 	if l.netLink != nil {
-		l.netLink.Close()
+		if err := l.netLink.Close(); err != nil {
+			closeErrs = append(closeErrs, fmt.Errorf("closing net link: %w", err))
+		}
 	}
 
 	// Close BPF objects
 	if l.execObjs != nil {
-		l.execObjs.Close()
+		if err := l.execObjs.Close(); err != nil {
+			closeErrs = append(closeErrs, fmt.Errorf("closing exec objects: %w", err))
+		}
 	}
 	if l.fileObjs != nil {
-		l.fileObjs.Close()
+		if err := l.fileObjs.Close(); err != nil {
+			closeErrs = append(closeErrs, fmt.Errorf("closing file objects: %w", err))
+		}
 	}
 	if l.netObjs != nil {
-		l.netObjs.Close()
+		if err := l.netObjs.Close(); err != nil {
+			closeErrs = append(closeErrs, fmt.Errorf("closing net objects: %w", err))
+		}
 	}
 
-	return nil
+	return errors.Join(closeErrs...)
 }
 
 // ktimeToWall converts a BPF ktime_get_ns() timestamp to wall clock time.

@@ -118,9 +118,9 @@ func TestNullTermStr(t *testing.T) {
 
 func TestBuildExecFieldsMap(t *testing.T) {
 	fields := buildExecFieldsMap(
-		1234,  // pid
-		1000,  // ppid
-		0,     // uid
+		1234, // pid
+		1000, // ppid
+		0,    // uid
 		"/usr/bin/bash",
 		"/usr/bin/bash",
 		"bash -c ./exploit.sh",
@@ -133,15 +133,15 @@ func TestBuildExecFieldsMap(t *testing.T) {
 	)
 
 	checks := map[string]string{
-		"Image":              "/usr/bin/bash",
-		"CommandLine":        "bash -c ./exploit.sh",
-		"ParentImage":        "/bin/systemd",
-		"ParentCommandLine":  "systemd",
-		"User":               "root",
-		"LogonId":            "0",
-		"CurrentDirectory":   "/tmp",
-		"ProcessId":          "1234",
-		"ParentProcessId":    "1000",
+		"Image":             "/usr/bin/bash",
+		"CommandLine":       "bash -c ./exploit.sh",
+		"ParentImage":       "/bin/systemd",
+		"ParentCommandLine": "systemd",
+		"User":              "root",
+		"LogonId":           "0",
+		"CurrentDirectory":  "/tmp",
+		"ProcessId":         "1234",
+		"ParentProcessId":   "1000",
 	}
 
 	for key, expected := range checks {
@@ -282,5 +282,32 @@ func TestFormatIPv4Loopback(t *testing.T) {
 	got := formatIPv4(addr)
 	if got != "127.0.0.1" {
 		t.Errorf("formatIPv4() = %q, want %q", got, "127.0.0.1")
+	}
+}
+
+func TestFormatIPv6AllZero(t *testing.T) {
+	var addr [16]byte
+
+	got := formatIPv6(addr)
+	if got != "::" {
+		t.Errorf("formatIPv6() = %q, want %q", got, "::")
+	}
+}
+
+func TestFormatIPv6Compressed(t *testing.T) {
+	addr := [16]byte{
+		0x20, 0x01, // 2001
+		0x0d, 0xb8, // db8
+		0x00, 0x00,
+		0x00, 0x00,
+		0x00, 0x00,
+		0x00, 0x00,
+		0x00, 0x00,
+		0x00, 0x01, // 1
+	}
+
+	got := formatIPv6(addr)
+	if got != "2001:db8::1" {
+		t.Errorf("formatIPv6() = %q, want %q", got, "2001:db8::1")
 	}
 }

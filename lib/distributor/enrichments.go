@@ -1,6 +1,8 @@
 package distributor
 
 import (
+	"strconv"
+
 	"github.com/nicholasgasior/aurora-linux/lib/enrichment"
 )
 
@@ -40,11 +42,11 @@ func enrichParentFields(fields enrichment.DataFieldsMap, correlator *enrichment.
 	parentImage := fields.Value("ParentImage")
 	parentCmdLine := fields.Value("ParentCommandLine")
 
-	// Parse PPID
-	var ppid uint32
-	for _, c := range ppidVal.String {
-		ppid = ppid*10 + uint32(c-'0')
+	ppid64, err := strconv.ParseUint(ppidVal.String, 10, 32)
+	if err != nil {
+		return
 	}
+	ppid := uint32(ppid64)
 
 	info := correlator.Lookup(ppid)
 	if info == nil {
@@ -77,10 +79,11 @@ func enrichImageFromCache(fields enrichment.DataFieldsMap, correlator *enrichmen
 		return
 	}
 
-	var pid uint32
-	for _, c := range pidVal.String {
-		pid = pid*10 + uint32(c-'0')
+	pid64, err := strconv.ParseUint(pidVal.String, 10, 32)
+	if err != nil {
+		return
 	}
+	pid := uint32(pid64)
 
 	info := correlator.Lookup(pid)
 	if info != nil && info.Image != "" {

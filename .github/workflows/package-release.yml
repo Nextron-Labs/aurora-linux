@@ -1,0 +1,117 @@
+name: Package Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release tag/version (example: v1.2.3)"
+        required: true
+        type: string
+
+jobs:
+  package:
+    name: Build release package (${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        goarch:
+          - amd64
+          - 386
+          - arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Resolve release version
+        id: version
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            version="${{ inputs.version }}"
+          else
+            version="${GITHUB_REF_NAME}"
+          fi
+          echo "value=${version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Install BPF build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bpftool clang llvm
+
+      - name: Generate eBPF bindings
+        run: |
+          mkdir -p lib/provider/ebpf/bpf/headers
+          bpftool btf dump file /sys/kernel/btf/vmlinux format c > lib/provider/ebpf/bpf/vmlinux.h
+          go generate ./lib/provider/ebpf
+
+      - name: Fetch Sigma Linux rules
+        run: git clone --depth 1 https://github.com/SigmaHQ/sigma.git /tmp/sigma
+
+      - name: Build aurora-linux binary
+        run: |
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=linux GOARCH="${{ matrix.goarch }}" \
+            go build \
+              -ldflags "-X main.version=${{ steps.version.outputs.value }}" \
+              -o "dist/aurora-linux-${{ matrix.goarch }}" \
+              ./cmd/aurora-linux
+
+      - name: Assemble package
+        run: |
+          VERSION="${{ steps.version.outputs.value }}" \
+          GOARCH="${{ matrix.goarch }}" \
+          BINARY_PATH="dist/aurora-linux-${{ matrix.goarch }}" \
+          SIGMA_REPO_DIR="/tmp/sigma" \
+          DIST_DIR="dist" \
+          ./scripts/build-package.sh
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aurora-linux-package-${{ matrix.goarch }}
+          path: dist/aurora-linux-${{ steps.version.outputs.value }}-linux-${{ matrix.goarch }}.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    runs-on: ubuntu-latest
+    needs:
+      - package
+    permissions:
+      contents: write
+
+    steps:
+      - name: Resolve release version
+        id: version
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            version="${{ inputs.version }}"
+          else
+            version="${GITHUB_REF_NAME}"
+          fi
+          echo "value=${version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Download package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: aurora-linux-package-*
+          merge-multiple: true
+          path: dist
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.value }}
+          name: Aurora Linux ${{ steps.version.outputs.value }}
+          files: dist/*.tar.gz
+          generate_release_notes: true
