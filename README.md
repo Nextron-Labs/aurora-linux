@@ -176,11 +176,10 @@ When a Sigma rule matches, Aurora Linux emits a structured alert:
 
 ```json
 {
-  "level": "warning",
+  "level": "info",
   "message": "Sigma match",
   "sigma_rule": "e2072cab-8c9a-459b-b63c-40ae79e27031",
   "sigma_title": "Decode Base64 Encoded Text",
-  "sigma_level": "low",
   "sigma_match_fields": ["CommandLine", "Image"],
   "sigma_match_details": {
     "CommandLine": ["base64 -d"],

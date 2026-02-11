@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -39,7 +40,8 @@ func New(params Parameters) *Agent {
 // It blocks until a SIGINT or SIGTERM is received.
 func (a *Agent) Run() error {
 	// Configure logging
-	if err := a.configureLogging(); err != nil {
+	sigmaLogger, err := a.configureLogging()
+	if err != nil {
 		return fmt.Errorf("configuring logging: %w", err)
 	}
 	defer a.closeLogFile()
@@ -60,7 +62,6 @@ func (a *Agent) Run() error {
 	}
 
 	// Create correlator
-	var err error
 	a.correlator, err = enrichment.NewCorrelator(a.params.CorrelationCacheSize)
 	if err != nil {
 		return fmt.Errorf("creating correlator: %w", err)
@@ -74,7 +75,6 @@ func (a *Agent) Run() error {
 	a.dist = distributor.New(a.enricher, a.correlator)
 
 	// Create and initialize Sigma consumer
-	sigmaLogger := log.StandardLogger()
 	a.consumer = sigma.New(sigma.Config{
 		RuleDirs:      a.params.RuleDirs,
 		Logger:        sigmaLogger,
@@ -225,12 +225,8 @@ func (a *Agent) reportStats(stop <-chan struct{}, done chan<- struct{}) {
 }
 
 // configureLogging sets up the log formatter and output.
-func (a *Agent) configureLogging() error {
-	if a.params.JSONOutput {
-		log.SetFormatter(&logging.JSONFormatter{})
-	} else {
-		log.SetFormatter(&logging.TextFormatter{})
-	}
+func (a *Agent) configureLogging() (*log.Logger, error) {
+	log.SetFormatter(&logging.TextFormatter{})
 
 	if a.params.Verbose {
 		log.SetLevel(log.DebugLevel)
@@ -238,16 +234,32 @@ func (a *Agent) configureLogging() error {
 		log.SetLevel(log.InfoLevel)
 	}
 
+	diagnosticOutput := io.Writer(os.Stderr)
 	if a.params.LogFile != "" {
 		f, err := openSecureLogFile(a.params.LogFile)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		a.logFile = f
-		log.SetOutput(f)
+
+		if a.params.JSONOutput {
+			// Keep diagnostics visible on stderr while still honoring --logfile.
+			diagnosticOutput = io.MultiWriter(os.Stderr, f)
+		} else {
+			diagnosticOutput = f
+		}
+	}
+	log.SetOutput(diagnosticOutput)
+
+	if !a.params.JSONOutput {
+		return log.StandardLogger(), nil
 	}
 
-	return nil
+	matchLogger := log.New()
+	matchLogger.SetLevel(log.GetLevel())
+	matchLogger.SetFormatter(&logging.JSONFormatter{})
+	matchLogger.SetOutput(os.Stdout)
+	return matchLogger, nil
 }
 
 func (a *Agent) closeLogFile() {
@@ -257,7 +269,7 @@ func (a *Agent) closeLogFile() {
 
 	f := a.logFile
 	a.logFile = nil
-	log.SetOutput(os.Stdout)
+	log.SetOutput(os.Stderr)
 	if err := f.Close(); err != nil {
 		log.WithError(err).Warn("Failed to close log file cleanly")
 	}

@@ -246,6 +246,12 @@ detection:
 	if got, _ := logged["rule_level"].(string); got != "medium" {
 		t.Fatalf("rule_level = %q, want medium", got)
 	}
+	if got, _ := logged["level"].(string); got != "warning" {
+		t.Fatalf("level = %q, want warning for medium rule", got)
+	}
+	if _, exists := logged["sigma_level"]; exists {
+		t.Fatalf("sigma_level should not be present, got %#v", logged["sigma_level"])
+	}
 
 	gotFields := toStringSetFromAnySlice(logged["sigma_match_fields"])
 	if _, ok := gotFields["CommandLine"]; !ok {
@@ -304,6 +310,31 @@ func TestLookupRuleLevelUsesPrecomputedMap(t *testing.T) {
 	}
 	if got := consumer.lookupRuleLevel("missing"); got != "" {
 		t.Fatalf("lookupRuleLevel() = %q, want empty string for missing ID", got)
+	}
+}
+
+func TestSigmaRuleLevelToLogLevel(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected log.Level
+	}{
+		{name: "informational", input: "informational", expected: log.InfoLevel},
+		{name: "info", input: "info", expected: log.InfoLevel},
+		{name: "low", input: "low", expected: log.InfoLevel},
+		{name: "medium", input: "medium", expected: log.WarnLevel},
+		{name: "high", input: "high", expected: log.ErrorLevel},
+		{name: "critical", input: "critical", expected: log.ErrorLevel},
+		{name: "unknown", input: "unknown", expected: log.WarnLevel},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sigmaRuleLevelToLogLevel(tc.input); got != tc.expected {
+				t.Fatalf("sigmaRuleLevelToLogLevel(%q) = %v, want %v", tc.input, got, tc.expected)
+			}
+		})
 	}
 }
 

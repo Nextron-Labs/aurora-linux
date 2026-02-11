@@ -201,12 +201,11 @@ func (s *SigmaConsumer) allowMatch(ruleID string) bool {
 // emitMatch logs a Sigma match.
 func (s *SigmaConsumer) emitMatch(event provider.Event, result sigma.Result) {
 	lookupKey := ruleLookupKey(result.ID, result.Title)
-	level := s.lookupRuleLevel(lookupKey)
+	ruleLevel := s.lookupRuleLevel(lookupKey)
 
 	fields := log.Fields{
 		"sigma_rule":  result.ID,
 		"sigma_title": result.Title,
-		"sigma_level": level,
 		"timestamp":   event.Time().Format(time.RFC3339Nano),
 	}
 
@@ -229,10 +228,11 @@ func (s *SigmaConsumer) emitMatch(event provider.Event, result sigma.Result) {
 		fields[key] = value
 	})
 
+	logLevel := sigmaRuleLevelToLogLevel(ruleLevel)
 	if s.logger != nil {
-		s.logger.WithFields(fields).Warn("Sigma match")
+		s.logger.WithFields(fields).Log(logLevel, "Sigma match")
 	} else {
-		log.WithFields(fields).Warn("Sigma match")
+		log.WithFields(fields).Log(logLevel, "Sigma match")
 	}
 }
 
@@ -259,6 +259,24 @@ func (s *SigmaConsumer) lookupRuleLevel(ruleID string) string {
 		return ""
 	}
 	return s.ruleLevels[ruleID]
+}
+
+func sigmaRuleLevelToLogLevel(ruleLevel string) log.Level {
+	normalizedLevel, _, ok := normalizeSigmaLevel(ruleLevel)
+	if !ok {
+		return log.WarnLevel
+	}
+
+	switch normalizedLevel {
+	case normalizedLevelInfo, normalizedLevelLow:
+		return log.InfoLevel
+	case normalizedLevelMedium:
+		return log.WarnLevel
+	case normalizedLevelHigh, normalizedLevelCritical:
+		return log.ErrorLevel
+	default:
+		return log.WarnLevel
+	}
 }
 
 // Matches returns the number of Sigma matches detected.
