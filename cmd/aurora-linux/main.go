@@ -20,8 +20,8 @@ func main() {
 		Long: `Aurora Linux is a standalone Linux EDR agent that collects system
 telemetry via eBPF, normalizes events into a Sigma-compatible schema, and
 matches them against Sigma rules in real time.`,
-		Example: `  aurora-linux --rules /opt/sigma/rules/linux/process_creation --json
-  aurora-linux --rules /opt/sigma/rules/linux/process_creation --rules /opt/sigma/rules/linux/network_connection --verbose`,
+		Example: `  aurora-linux --rules /opt/sigma/rules/linux --json
+  aurora-linux --rules /opt/sigma/rules/linux --rules /opt/custom/sigma --verbose`,
 		Version:       version,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,

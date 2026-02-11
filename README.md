@@ -64,16 +64,13 @@ go build -o aurora-linux ./cmd/aurora-linux/
 ### Run
 
 ```bash
-# Point at one or more Sigma rules directories and run
-sudo ./aurora-linux \
-    --rules /path/to/sigma/rules/linux/process_creation/ \
-    --rules /path/to/sigma/rules/linux/file_event/ \
-    --rules /path/to/sigma/rules/linux/network_connection/ \
-    --json
+# Point at the Linux Sigma root directory (subfolders are loaded recursively)
+sudo ./aurora-linux --rules /path/to/sigma/rules/linux --json
 ```
 
 `--rules` is required. Aurora validates rule directories at startup and exits
-with an actionable error if the paths are missing or invalid.
+with an actionable error if the paths are missing or invalid. Unsupported or
+unmapped rules are skipped; startup only fails when zero rules are loadable.
 
 ### Deploy as a Service
 
@@ -108,7 +105,7 @@ When a Sigma rule matches, Aurora Linux emits a structured alert:
 
 | Flag | Default | Description |
 |---|---|---|
-| `--rules` | (required) | Sigma rule directories (repeatable) |
+| `--rules` | (required) | Sigma rule directories (repeatable, scanned recursively) |
 | `--logfile` | stdout | Output log file path |
 | `--json` | off | JSON output format |
 | `--ringbuf-size` | 2048 | Ring buffer size in pages (currently informational; runtime tuning planned) |
