@@ -1,16 +1,29 @@
 # Aurora Linux
 
-Aurora Linux is a real-time Linux EDR agent that uses **eBPF** for kernel-level telemetry and evaluates events against **Sigma rules**.
+Aurora Linux is a real-time Linux EDR agent.
 
-```
-  KERNEL                          USER SPACE
+It attaches eBPF programs to kernel tracepoints, enriches the captured telemetry in user space, and evaluates each event against Sigma rules to emit high-signal alerts in text or JSON. The goal is practical host detection with low overhead and clear, actionable output.
 
-  sched_process_exec ──┐
-  sys_{enter,exit}_    │    ┌──────────┐    ┌────────────┐    ┌───────────┐
-    openat           ──┼───▶│ eBPF     │───▶│ Enrichment │───▶│  Sigma    │──▶ alerts
-  inet_sock_set_      │    │ Listener │    │ + Correlate│    │  Engine   │   (JSON/text)
-    state            ──┘    └──────────┘    └────────────┘    └───────────┘
-                          ring buffers      LRU parent cache    go-sigma-rule-engine
+```mermaid
+flowchart LR
+  subgraph KERNEL["Kernel"]
+    E1["sched_process_exec"]
+    E2["sys_enter/sys_exit_openat"]
+    E3["inet_sock_set_state"]
+  end
+
+  subgraph USER["User Space"]
+    L["eBPF Listener"]
+    C["Enrichment + Correlation"]
+    S["Sigma Engine"]
+  end
+
+  E1 --> L
+  E2 --> L
+  E3 --> L
+  L -->|ring buffers| C
+  C -->|LRU parent cache| S
+  S -->|JSON/text alerts| A["Alert Output"]
 ```
 
 ## What It Detects
