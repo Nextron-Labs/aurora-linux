@@ -75,7 +75,7 @@ type Parameters struct {
 // DefaultParameters returns parameters with sensible defaults.
 func DefaultParameters() Parameters {
 	return Parameters{
-		Version:              "0.1",
+		Version:              "0.1.2",
 		RingBufSizePages:     2048, // 8 MB
 		CorrelationCacheSize: 16384,
 		ThrottleRate:         1.0,

@@ -489,7 +489,7 @@ func (a *Agent) printWelcomeBanner() {
 
 	version := strings.TrimSpace(a.params.Version)
 	if version == "" {
-		version = "0.1"
+		version = "0.1.2"
 	}
 	if !strings.HasPrefix(strings.ToLower(version), "v") {
 		version = "v" + version
