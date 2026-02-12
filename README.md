@@ -66,7 +66,7 @@ go build -o aurora ./cmd/aurora/
 go build -o aurora-util ./cmd/aurora-util/
 ```
 
-Or use Make targets (now synced to `aurora` / `aurora-util` names):
+Or use Make targets:
 
 ```bash
 make build
@@ -75,7 +75,7 @@ make vet
 ```
 
 Linux note:
-- `make build` now auto-runs eBPF code generation when generated bindings are missing.
+- `make build` auto-runs eBPF code generation when generated bindings are missing.
 - Required tools on Linux: `bpftool` and `clang`.
 - If you want VCS metadata in binaries, override `BUILDVCS=true`:
   - `make build BUILDVCS=true`
@@ -103,7 +103,8 @@ sudo ./aurora --rules ~/sigma/rules/linux/ --json --min-level medium 2>&1 | jq .
 sudo cp aurora /opt/aurora-linux/
 sudo cp deploy/aurora.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now aurora
+sudo systemctl enable aurora
+sudo systemctl start aurora
 ```
 
 ### Automated Install (Recommended)
@@ -225,7 +226,7 @@ When a Sigma rule matches, Aurora Linux emits a structured alert:
 | `--trace` | off | Very-verbose event tracing (logs each observed eBPF event) |
 | `--low-prio` | off | Lower process priority via `nice` |
 | `--json` | off | JSON output format |
-| `--ringbuf-size` | 2048 | Ring buffer size in pages (currently informational; runtime tuning planned) |
+| `--ringbuf-size` | 2048 | Ring buffer size in pages (informational only; runtime tuning planned) |
 | `--correlation-cache` | 16384 | Parent process LRU cache entries |
 | `--throttle-rate` | 1.0 | Max Sigma matches per rule per second (`0` disables throttling) |
 | `--throttle-burst` | 5 | Burst allowance per rule (used when throttling is enabled) |
@@ -281,7 +282,7 @@ aurora-linux/
 │   ├── enrichment/            DataFieldsMap, correlator cache
 │   ├── consumer/sigma/        Sigma rule evaluation
 │   └── logging/               JSON + text formatters
-├── resources/log-sources/     Legacy Sigma category→provider mapping files (not currently consumed by runtime)
+├── resources/log-sources/     Legacy Sigma category→provider mapping files (not consumed by runtime)
 ├── deploy/                    systemd + template configs
 └── docs/                      Design plan + developer guide
 ```
