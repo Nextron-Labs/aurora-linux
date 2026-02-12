@@ -188,6 +188,7 @@ func (a *Agent) shutdown() {
 	}
 
 	var processed, matches, lost uint64
+	var correlatorLen int
 	if a.dist != nil {
 		processed = a.dist.Processed()
 	}
@@ -197,11 +198,15 @@ func (a *Agent) shutdown() {
 	if a.listener != nil {
 		lost = a.listener.LostEvents()
 	}
+	if a.correlator != nil {
+		correlatorLen = a.correlator.Len()
+	}
 
 	log.WithFields(log.Fields{
 		"events_processed": processed,
 		"sigma_matches":    matches,
 		"events_lost":      lost,
+		"correlator_size":  correlatorLen,
 	}).Info("Final statistics")
 }
 
@@ -225,11 +230,16 @@ func (a *Agent) reportStats(stop <-chan struct{}, done chan<- struct{}) {
 		lost := a.listener.LostEvents()
 		processed := a.dist.Processed()
 		matches := a.consumer.Matches()
+		correlatorLen := 0
+		if a.correlator != nil {
+			correlatorLen = a.correlator.Len()
+		}
 
 		fields := log.Fields{
 			"events_processed": processed,
 			"sigma_matches":    matches,
 			"events_lost":      lost,
+			"correlator_size":  correlatorLen,
 		}
 
 		if processed > 0 && lost > 0 {
