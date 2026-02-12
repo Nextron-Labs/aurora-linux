@@ -90,3 +90,25 @@ func TestApplyCLIOverrides(t *testing.T) {
 		t.Fatalf("LogFile should remain config value when CLI flag unchanged, got %q", dst.LogFile)
 	}
 }
+
+func TestApplyCLIOverridesAllowsDisablingSigmaNoCollapseWS(t *testing.T) {
+	flags := pflag.NewFlagSet("test", pflag.ContinueOnError)
+	var cli agent.Parameters
+	cli.SigmaNoCollapseWS = true
+	flags.BoolVar(&cli.SigmaNoCollapseWS, "sigma-no-collapse-ws", true, "")
+
+	if err := flags.Parse([]string{"--sigma-no-collapse-ws=false"}); err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+
+	dst := agent.DefaultParameters()
+	if !dst.SigmaNoCollapseWS {
+		t.Fatal("precondition failed: default SigmaNoCollapseWS should be true")
+	}
+
+	applyCLIOverrides(flags, &dst, cli)
+
+	if dst.SigmaNoCollapseWS {
+		t.Fatal("SigmaNoCollapseWS should be overridden to false from CLI")
+	}
+}

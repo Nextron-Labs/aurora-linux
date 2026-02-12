@@ -241,7 +241,7 @@ When a Sigma rule matches, Aurora Linux emits a structured alert:
 | `--throttle-burst` | 5 | Burst allowance per rule (used when throttling is enabled) |
 | `--min-level` | info | Load only rules at or above this Sigma level (`info`, `low`, `medium`, `high`, `critical`) |
 | `--stats-interval` | 60 | Stats logging interval (seconds, 0=off) |
-| `--sigma-no-collapse-ws` | off | Disable Sigma whitespace collapsing during matching (perf/memory optimization, stricter matching) |
+| `--sigma-no-collapse-ws` | on | Disable Sigma whitespace collapsing during matching (default, reduces allocation churn; stricter matching) |
 | `--pprof-listen` | off | Enable local pprof endpoint on loopback `host:port` (for on-demand profiling) |
 | `-v, --verbose` | off | Debug-level logging |
 
@@ -251,7 +251,8 @@ Operational notes:
 - `--no-stdout` requires at least one enabled sink (`--logfile`, `--tcp-target`, or `--udp-target`).
 - Text and JSON alert logs preserve reserved Sigma metadata fields and redact common secret/token patterns in logged fields.
 - `--min-level medium` loads only `medium`, `high`, and `critical` rules during startup.
-- `--sigma-no-collapse-ws` can reduce Sigma matching allocations significantly, but rules relying on whitespace normalization may match less often.
+- `--sigma-no-collapse-ws` is enabled by default to reduce long-run memory/CPU churn from Sigma whitespace normalization.
+- If you need legacy Sigma whitespace normalization semantics for compatibility testing, set `--sigma-no-collapse-ws=false`.
 - `--pprof-listen` accepts loopback hosts only (`localhost`, `127.0.0.1`, `::1`).
 
 Example YAML config:

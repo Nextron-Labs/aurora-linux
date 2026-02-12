@@ -63,7 +63,8 @@ type Parameters struct {
 	StatsInterval int
 
 	// SigmaNoCollapseWS disables sigma whitespace collapsing during pattern matching.
-	// This can significantly reduce allocations at the cost of stricter whitespace matching.
+	// Enabled by default to avoid high regex allocation churn in long-running agents.
+	// Set to false to preserve sigma whitespace normalization behavior.
 	SigmaNoCollapseWS bool
 
 	// PprofListen enables a local pprof HTTP endpoint on host:port.
@@ -81,5 +82,6 @@ func DefaultParameters() Parameters {
 		ThrottleBurst:        5,
 		MinLevel:             "info",
 		StatsInterval:        60,
+		SigmaNoCollapseWS:    true,
 	}
 }
