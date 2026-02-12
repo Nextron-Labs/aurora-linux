@@ -62,6 +62,10 @@ type Parameters struct {
 	// StatsInterval is how often to log processing stats (seconds). 0 = disabled.
 	StatsInterval int
 
+	// SigmaNoCollapseWS disables sigma whitespace collapsing during pattern matching.
+	// This can significantly reduce allocations at the cost of stricter whitespace matching.
+	SigmaNoCollapseWS bool
+
 	// PprofListen enables a local pprof HTTP endpoint on host:port.
 	// Empty disables runtime profiling endpoints.
 	PprofListen string

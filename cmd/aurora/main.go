@@ -74,6 +74,7 @@ func main() {
 	flags.StringVar(&params.MinLevel, "min-level", params.MinLevel, "Minimum Sigma rule level to load (info, low, medium, high, critical)")
 	flags.BoolVarP(&params.Verbose, "verbose", "v", false, "Enable debug-level logging")
 	flags.IntVar(&params.StatsInterval, "stats-interval", params.StatsInterval, "Stats logging interval in seconds (0=disabled)")
+	flags.BoolVar(&params.SigmaNoCollapseWS, "sigma-no-collapse-ws", false, "Disable sigma whitespace collapsing during pattern matching")
 	flags.StringVar(&params.PprofListen, "pprof-listen", "", "Enable pprof HTTP endpoint on loopback host:port (example: 127.0.0.1:6060)")
 
 	if err := rootCmd.Execute(); err != nil {
@@ -148,6 +149,8 @@ func applyCLIOverrides(set *pflag.FlagSet, dst *agent.Parameters, cli agent.Para
 			dst.Verbose = cli.Verbose
 		case "stats-interval":
 			dst.StatsInterval = cli.StatsInterval
+		case "sigma-no-collapse-ws":
+			dst.SigmaNoCollapseWS = cli.SigmaNoCollapseWS
 		case "pprof-listen":
 			dst.PprofListen = cli.PprofListen
 		}

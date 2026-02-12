@@ -29,6 +29,7 @@ type yamlConfig struct {
 	MinLevel             *string  `yaml:"min-level"`
 	Verbose              *bool    `yaml:"verbose"`
 	StatsInterval        *int     `yaml:"stats-interval"`
+	SigmaNoCollapseWS    *bool    `yaml:"sigma-no-collapse-ws"`
 	PprofListen          *string  `yaml:"pprof-listen"`
 }
 
@@ -110,6 +111,9 @@ func ApplyConfigFile(path string, params *Parameters) error {
 	}
 	if cfg.StatsInterval != nil {
 		params.StatsInterval = *cfg.StatsInterval
+	}
+	if cfg.SigmaNoCollapseWS != nil {
+		params.SigmaNoCollapseWS = *cfg.SigmaNoCollapseWS
 	}
 	if cfg.PprofListen != nil {
 		params.PprofListen = strings.TrimSpace(*cfg.PprofListen)

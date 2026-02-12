@@ -23,6 +23,7 @@ type SigmaConsumer struct {
 	ruleMeta   map[string]ruleMetadata
 	minLevel   string
 	minPrio    int
+	noCollapse bool
 
 	// Throttling: per-rule rate limiter to prevent duplicate spam
 	throttles     map[string]*rate.Limiter
@@ -53,6 +54,7 @@ type Config struct {
 	ThrottleRate  float64 // max matches per rule per second (0 = no throttle)
 	ThrottleBurst int     // burst size for throttle
 	MinLevel      string  // minimum Sigma level to load (info, low, medium, high, critical)
+	NoCollapseWS  bool    // disable sigma whitespace collapsing during pattern matching
 }
 
 // New creates a new SigmaConsumer.
@@ -76,6 +78,7 @@ func New(cfg Config) *SigmaConsumer {
 		ruleMeta:      make(map[string]ruleMetadata),
 		minLevel:      minLevel,
 		minPrio:       minPrio,
+		noCollapse:    cfg.NoCollapseWS,
 		throttleOn:    throttleOn,
 		throttleRate:  throttleRate,
 		throttleBurst: burst,
@@ -100,6 +103,7 @@ func (s *SigmaConsumer) InitializeWithRules(ruleDirs []string) error {
 		Directory:       ruleDirs,
 		FailOnRuleParse: false,
 		FailOnYamlParse: false,
+		NoCollapseWS:    s.noCollapse,
 	})
 	if err != nil {
 		return fmt.Errorf("creating sigma ruleset: %w", err)

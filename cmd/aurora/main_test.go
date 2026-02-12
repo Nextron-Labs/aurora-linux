@@ -52,12 +52,14 @@ func TestApplyCLIOverrides(t *testing.T) {
 	flags.StringVar(&cli.LogFile, "logfile", "", "")
 	flags.BoolVar(&cli.NoStdout, "no-stdout", false, "")
 	flags.StringVar(&cli.TCPTarget, "tcp-target", "", "")
+	flags.BoolVar(&cli.SigmaNoCollapseWS, "sigma-no-collapse-ws", false, "")
 	flags.StringVar(&cli.PprofListen, "pprof-listen", "", "")
 
 	if err := flags.Parse([]string{
 		"--rules", "/tmp/cli-rules",
 		"--no-stdout",
 		"--tcp-target", "127.0.0.1:1514",
+		"--sigma-no-collapse-ws",
 		"--pprof-listen", "127.0.0.1:6060",
 	}); err != nil {
 		t.Fatalf("Parse() error = %v", err)
@@ -77,6 +79,9 @@ func TestApplyCLIOverrides(t *testing.T) {
 	}
 	if dst.TCPTarget != "127.0.0.1:1514" {
 		t.Fatalf("TCPTarget = %q, want CLI value", dst.TCPTarget)
+	}
+	if !dst.SigmaNoCollapseWS {
+		t.Fatal("SigmaNoCollapseWS should be overridden from CLI")
 	}
 	if dst.PprofListen != "127.0.0.1:6060" {
 		t.Fatalf("PprofListen = %q, want CLI value", dst.PprofListen)

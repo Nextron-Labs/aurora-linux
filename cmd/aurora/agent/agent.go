@@ -70,6 +70,7 @@ func (a *Agent) Run() error {
 		"ringbuf_pages":     a.params.RingBufSizePages,
 		"correlation_cache": a.params.CorrelationCacheSize,
 		"min_level":         a.params.MinLevel,
+		"sigma_no_collapse": a.params.SigmaNoCollapseWS,
 		"process_exclude":   a.params.ProcessExclude,
 		"trace":             a.params.Trace,
 		"no_stdout":         a.params.NoStdout,
@@ -108,6 +109,7 @@ func (a *Agent) Run() error {
 		ThrottleRate:  a.params.ThrottleRate,
 		ThrottleBurst: a.params.ThrottleBurst,
 		MinLevel:      a.params.MinLevel,
+		NoCollapseWS:  a.params.SigmaNoCollapseWS,
 	})
 
 	if err := a.consumer.Initialize(); err != nil {
