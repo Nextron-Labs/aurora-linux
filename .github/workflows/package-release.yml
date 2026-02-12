@@ -43,6 +43,13 @@ jobs:
           fi
           echo "value=${version}" >> "${GITHUB_OUTPUT}"
 
+      - name: Compute archive path
+        id: archive
+        run: |
+          normalized="${{ steps.version.outputs.value }}"
+          normalized="${normalized#v}"
+          echo "path=dist/aurora-linux-v${normalized}-linux-${{ matrix.goarch }}.tar.gz" >> "${GITHUB_OUTPUT}"
+
       - name: Install BPF build dependencies
         run: |
           sudo apt-get update
@@ -96,7 +103,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: aurora-package-${{ matrix.goarch }}
-          path: dist/aurora-${{ steps.version.outputs.value }}-linux-${{ matrix.goarch }}.tar.gz
+          path: ${{ steps.archive.outputs.path }}
           if-no-files-found: error
 
   release:
