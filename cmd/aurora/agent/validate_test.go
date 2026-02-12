@@ -155,3 +155,29 @@ func TestValidateParametersAcceptsNoStdoutWithUDPSink(t *testing.T) {
 		t.Fatalf("ValidateParameters() unexpected error: %v", err)
 	}
 }
+
+func TestValidateParametersRejectsNonLoopbackPprofListen(t *testing.T) {
+	tmpDir := t.TempDir()
+	params := DefaultParameters()
+	params.RuleDirs = []string{tmpDir}
+	params.PprofListen = "0.0.0.0:6060"
+
+	err := ValidateParameters(params)
+	if err == nil {
+		t.Fatal("ValidateParameters() expected error for non-loopback --pprof-listen")
+	}
+	if !strings.Contains(err.Error(), "--pprof-listen") {
+		t.Fatalf("expected --pprof-listen context, got %v", err)
+	}
+}
+
+func TestValidateParametersAcceptsLoopbackPprofListen(t *testing.T) {
+	tmpDir := t.TempDir()
+	params := DefaultParameters()
+	params.RuleDirs = []string{tmpDir}
+	params.PprofListen = "127.0.0.1:6060"
+
+	if err := ValidateParameters(params); err != nil {
+		t.Fatalf("ValidateParameters() unexpected error: %v", err)
+	}
+}

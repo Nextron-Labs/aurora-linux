@@ -141,6 +141,15 @@ sudo ./aurora-util update-signatures
 
 # Upgrade aurora from Aurora-Linux GitHub releases
 sudo ./aurora-util upgrade-aurora
+
+# Collect CPU (30s) + heap profiles from a running aurora instance
+sudo ./aurora-util collect-profile --pprof-url http://127.0.0.1:6060 --output-dir /tmp/aurora-profiles
+```
+
+Enable pprof on the running agent (disabled by default):
+
+```bash
+sudo ./aurora --rules /path/to/sigma/rules/linux --json --pprof-listen 127.0.0.1:6060
 ```
 
 ### Scheduled Maintenance (Cron)
@@ -232,6 +241,7 @@ When a Sigma rule matches, Aurora Linux emits a structured alert:
 | `--throttle-burst` | 5 | Burst allowance per rule (used when throttling is enabled) |
 | `--min-level` | info | Load only rules at or above this Sigma level (`info`, `low`, `medium`, `high`, `critical`) |
 | `--stats-interval` | 60 | Stats logging interval (seconds, 0=off) |
+| `--pprof-listen` | off | Enable local pprof endpoint on loopback `host:port` (for on-demand profiling) |
 | `-v, --verbose` | off | Debug-level logging |
 
 Operational notes:
@@ -240,6 +250,7 @@ Operational notes:
 - `--no-stdout` requires at least one enabled sink (`--logfile`, `--tcp-target`, or `--udp-target`).
 - Text and JSON alert logs preserve reserved Sigma metadata fields and redact common secret/token patterns in logged fields.
 - `--min-level medium` loads only `medium`, `high`, and `critical` rules during startup.
+- `--pprof-listen` accepts loopback hosts only (`localhost`, `127.0.0.1`, `::1`).
 
 Example YAML config:
 
@@ -250,6 +261,7 @@ logfile: /var/log/aurora-linux/aurora.log
 logfile-format: syslog
 tcp-target: myserver.local:514
 tcp-format: json
+pprof-listen: 127.0.0.1:6060
 ```
 
 ## Architecture

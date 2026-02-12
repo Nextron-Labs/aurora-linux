@@ -61,6 +61,10 @@ type Parameters struct {
 
 	// StatsInterval is how often to log processing stats (seconds). 0 = disabled.
 	StatsInterval int
+
+	// PprofListen enables a local pprof HTTP endpoint on host:port.
+	// Empty disables runtime profiling endpoints.
+	PprofListen string
 }
 
 // DefaultParameters returns parameters with sensible defaults.

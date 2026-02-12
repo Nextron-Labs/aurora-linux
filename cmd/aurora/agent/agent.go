@@ -1,8 +1,13 @@
 package agent
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -31,6 +36,8 @@ type Agent struct {
 	statsDone  chan struct{}
 	logFile    *os.File
 	closers    []func() error
+	pprofSrv   *http.Server
+	pprofAddr  string
 }
 
 // New creates a new agent from the given parameters.
@@ -68,12 +75,17 @@ func (a *Agent) Run() error {
 		"no_stdout":         a.params.NoStdout,
 		"tcp_target":        a.params.TCPTarget,
 		"udp_target":        a.params.UDPTarget,
+		"pprof_listen":      a.params.PprofListen,
 	}).Info("Configuration")
 
 	if a.params.RingBufSizePages != DefaultParameters().RingBufSizePages {
 		log.WithField("ringbuf_pages", a.params.RingBufSizePages).Warn(
 			"--ringbuf-size is currently informational and not applied at runtime",
 		)
+	}
+
+	if err := a.startPprofEndpoint(); err != nil {
+		return err
 	}
 
 	// Create correlator
@@ -175,6 +187,7 @@ func (a *Agent) shutdown() {
 		<-a.statsDone
 		a.statsDone = nil
 	}
+	a.stopPprofEndpoint()
 
 	if a.listener != nil {
 		if err := a.listener.Close(); err != nil {
@@ -208,6 +221,57 @@ func (a *Agent) shutdown() {
 		"events_lost":      lost,
 		"correlator_size":  correlatorLen,
 	}).Info("Final statistics")
+}
+
+func (a *Agent) startPprofEndpoint() error {
+	listenAddr := strings.TrimSpace(a.params.PprofListen)
+	if listenAddr == "" {
+		return nil
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+
+	srv := &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	ln, err := net.Listen("tcp", listenAddr)
+	if err != nil {
+		return fmt.Errorf("starting pprof endpoint on %q: %w", listenAddr, err)
+	}
+
+	a.pprofSrv = srv
+	a.pprofAddr = ln.Addr().String()
+	go func() {
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.WithError(err).Error("pprof endpoint stopped unexpectedly")
+		}
+	}()
+
+	log.WithField("pprof_listen", a.pprofAddr).Info("pprof endpoint enabled")
+	return nil
+}
+
+func (a *Agent) stopPprofEndpoint() {
+	if a.pprofSrv == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	if err := a.pprofSrv.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.WithError(err).Warn("Failed to shut down pprof endpoint cleanly")
+	}
+
+	a.pprofSrv = nil
+	a.pprofAddr = ""
 }
 
 // reportStats periodically logs processing statistics.

@@ -3,8 +3,13 @@ package main
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -156,4 +161,115 @@ func writeTestTarGz(archivePath string, files map[string]string) error {
 	}
 
 	return nil
+}
+
+func TestNormalizePprofBaseURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{
+			name:  "root URL",
+			input: "http://127.0.0.1:6060",
+			want:  "http://127.0.0.1:6060",
+		},
+		{
+			name:  "debug pprof path",
+			input: "http://localhost:6060/debug/pprof/",
+			want:  "http://localhost:6060",
+		},
+		{
+			name:    "unsupported scheme",
+			input:   "ftp://localhost:6060",
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := normalizePprofBaseURL(tc.input)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("normalizePprofBaseURL(%q) expected error", tc.input)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("normalizePprofBaseURL(%q) error = %v", tc.input, err)
+			}
+			if got != tc.want {
+				t.Fatalf("normalizePprofBaseURL(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRunCollectProfileDownloadsRequestedProfiles(t *testing.T) {
+	t.Parallel()
+
+	var cpuCalled atomic.Bool
+	var heapCalled atomic.Bool
+	var allocsCalled atomic.Bool
+	var badSeconds atomic.Value
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/debug/pprof/profile":
+			if got := r.URL.Query().Get("seconds"); got != "1" {
+				badSeconds.Store(got)
+			}
+			cpuCalled.Store(true)
+			_, _ = w.Write([]byte("cpu-profile"))
+		case "/debug/pprof/heap":
+			heapCalled.Store(true)
+			_, _ = w.Write([]byte("heap-profile"))
+		case "/debug/pprof/allocs":
+			allocsCalled.Store(true)
+			_, _ = w.Write([]byte("allocs-profile"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	outDir := t.TempDir()
+	err := runCollectProfile(context.Background(), profileCaptureOptions{
+		PprofURL:   server.URL,
+		OutputDir:  outDir,
+		CPUSeconds: 1,
+		Heap:       true,
+		Allocs:     true,
+	})
+	if err != nil {
+		t.Fatalf("runCollectProfile() error = %v", err)
+	}
+
+	if got, ok := badSeconds.Load().(string); ok {
+		t.Fatalf("profile seconds query = %q, want 1", got)
+	}
+	if !cpuCalled.Load() || !heapCalled.Load() || !allocsCalled.Load() {
+		t.Fatalf(
+			"expected all profile endpoints to be called (cpu=%v heap=%v allocs=%v)",
+			cpuCalled.Load(),
+			heapCalled.Load(),
+			allocsCalled.Load(),
+		)
+	}
+
+	entries, err := os.ReadDir(outDir)
+	if err != nil {
+		t.Fatalf("ReadDir() error = %v", err)
+	}
+	if len(entries) != 3 {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Fatalf("expected 3 profile files, got %d (%s)", len(entries), strings.Join(names, ", "))
+	}
 }

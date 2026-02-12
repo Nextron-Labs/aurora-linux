@@ -29,6 +29,7 @@ type yamlConfig struct {
 	MinLevel             *string  `yaml:"min-level"`
 	Verbose              *bool    `yaml:"verbose"`
 	StatsInterval        *int     `yaml:"stats-interval"`
+	PprofListen          *string  `yaml:"pprof-listen"`
 }
 
 // ApplyConfigFile loads YAML configuration from path and applies only fields
@@ -109,6 +110,9 @@ func ApplyConfigFile(path string, params *Parameters) error {
 	}
 	if cfg.StatsInterval != nil {
 		params.StatsInterval = *cfg.StatsInterval
+	}
+	if cfg.PprofListen != nil {
+		params.PprofListen = strings.TrimSpace(*cfg.PprofListen)
 	}
 
 	return nil

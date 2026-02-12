@@ -54,6 +54,11 @@ func ValidateParameters(params Parameters) error {
 	if params.StatsInterval < 0 {
 		return fmt.Errorf("--stats-interval must be >= 0, got %d", params.StatsInterval)
 	}
+	if strings.TrimSpace(params.PprofListen) != "" {
+		if err := validateLoopbackHostPort("--pprof-listen", params.PprofListen); err != nil {
+			return err
+		}
+	}
 
 	if params.LogFile != "" {
 		logDir := filepath.Dir(filepath.Clean(params.LogFile))
@@ -112,4 +117,35 @@ func validateHostPort(flagName string, target string) error {
 		return fmt.Errorf("%s port must be in range 1-65535 (got %d)", flagName, portNum)
 	}
 	return nil
+}
+
+func validateLoopbackHostPort(flagName string, target string) error {
+	target = strings.TrimSpace(target)
+	host, port, err := net.SplitHostPort(target)
+	if err != nil {
+		return fmt.Errorf("%s must be host:port (got %q): %w", flagName, target, err)
+	}
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return fmt.Errorf("%s must include an explicit loopback host (got %q)", flagName, target)
+	}
+	if !isLoopbackHost(host) {
+		return fmt.Errorf("%s host must be loopback (localhost, 127.0.0.1, or ::1), got %q", flagName, host)
+	}
+	portNum, err := strconv.Atoi(port)
+	if err != nil {
+		return fmt.Errorf("%s must include a numeric port (got %q)", flagName, target)
+	}
+	if portNum < 1 || portNum > 65535 {
+		return fmt.Errorf("%s port must be in range 1-65535 (got %d)", flagName, portNum)
+	}
+	return nil
+}
+
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

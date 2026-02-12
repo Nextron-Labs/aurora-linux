@@ -62,6 +62,15 @@ type upgradeOptions struct {
 	DryRun      bool
 }
 
+type profileCaptureOptions struct {
+	PprofURL   string
+	OutputDir  string
+	CPUSeconds int
+	Heap       bool
+	Allocs     bool
+	Timeout    time.Duration
+}
+
 func main() {
 	rootCmd := &cobra.Command{
 		Use:     "aurora-util",
@@ -110,7 +119,26 @@ func main() {
 	upgradeCmd.Flags().StringVar(&upOpts.GitHubToken, "github-token", "", "Optional GitHub API token (defaults to GITHUB_TOKEN env)")
 	upgradeCmd.Flags().BoolVar(&upOpts.DryRun, "dry-run", false, "Print actions without writing changes")
 
-	rootCmd.AddCommand(sigCmd, upgradeCmd)
+	var profileOpts profileCaptureOptions
+	profileCmd := &cobra.Command{
+		Use:   "collect-profile",
+		Short: "Collect pprof CPU/heap profiles from a running Aurora agent",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			return runCollectProfile(ctx, profileOpts)
+		},
+	}
+	profileCmd.Flags().StringVar(&profileOpts.PprofURL, "pprof-url", "http://127.0.0.1:6060", "Base URL of aurora pprof endpoint")
+	profileCmd.Flags().StringVar(&profileOpts.OutputDir, "output-dir", ".", "Directory where profiles are written")
+	profileCmd.Flags().IntVar(&profileOpts.CPUSeconds, "cpu-seconds", 30, "CPU profile duration in seconds (0 disables CPU profile)")
+	profileCmd.Flags().BoolVar(&profileOpts.Heap, "heap", true, "Collect heap profile (/debug/pprof/heap?gc=1)")
+	profileCmd.Flags().BoolVar(&profileOpts.Allocs, "allocs", false, "Collect allocs profile (/debug/pprof/allocs?gc=1)")
+	profileCmd.Flags().DurationVar(&profileOpts.Timeout, "timeout", 0, "HTTP timeout (default: derived from cpu-seconds)")
+
+	rootCmd.AddCommand(sigCmd, upgradeCmd, profileCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -221,6 +249,103 @@ func runUpgradeAurora(ctx context.Context, opts upgradeOptions) error {
 		fmt.Printf("Previous binary backup: %s\n", backupPath)
 	}
 	return nil
+}
+
+func runCollectProfile(ctx context.Context, opts profileCaptureOptions) error {
+	baseURL, err := normalizePprofBaseURL(opts.PprofURL)
+	if err != nil {
+		return err
+	}
+	if opts.CPUSeconds < 0 {
+		return fmt.Errorf("--cpu-seconds must be >= 0, got %d", opts.CPUSeconds)
+	}
+	if !opts.Heap && !opts.Allocs && opts.CPUSeconds == 0 {
+		return errors.New("nothing to collect: enable --heap/--allocs or set --cpu-seconds > 0")
+	}
+
+	timeout := opts.Timeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+		if opts.CPUSeconds > 0 {
+			timeout = time.Duration(opts.CPUSeconds+15) * time.Second
+		}
+	}
+	client := &http.Client{Timeout: timeout}
+
+	outDir := strings.TrimSpace(opts.OutputDir)
+	if outDir == "" {
+		return errors.New("--output-dir cannot be empty")
+	}
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return fmt.Errorf("creating output directory %q: %w", outDir, err)
+	}
+
+	ts := time.Now().UTC().Format("20060102T150405Z")
+	written := make([]string, 0, 3)
+
+	if opts.CPUSeconds > 0 {
+		cpuURL := fmt.Sprintf("%s/debug/pprof/profile?seconds=%d", baseURL, opts.CPUSeconds)
+		cpuPath := filepath.Join(outDir, fmt.Sprintf("aurora-cpu-%ds-%s.pprof", opts.CPUSeconds, ts))
+		if err := downloadFile(ctx, client, cpuURL, "", cpuPath); err != nil {
+			return err
+		}
+		written = append(written, cpuPath)
+	}
+
+	if opts.Heap {
+		heapURL := fmt.Sprintf("%s/debug/pprof/heap?gc=1", baseURL)
+		heapPath := filepath.Join(outDir, fmt.Sprintf("aurora-heap-%s.pprof", ts))
+		if err := downloadFile(ctx, client, heapURL, "", heapPath); err != nil {
+			return err
+		}
+		written = append(written, heapPath)
+	}
+
+	if opts.Allocs {
+		allocsURL := fmt.Sprintf("%s/debug/pprof/allocs?gc=1", baseURL)
+		allocsPath := filepath.Join(outDir, fmt.Sprintf("aurora-allocs-%s.pprof", ts))
+		if err := downloadFile(ctx, client, allocsURL, "", allocsPath); err != nil {
+			return err
+		}
+		written = append(written, allocsPath)
+	}
+
+	for _, profilePath := range written {
+		fmt.Printf("Wrote profile: %s\n", profilePath)
+	}
+	return nil
+}
+
+func normalizePprofBaseURL(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", errors.New("--pprof-url cannot be empty")
+	}
+
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("invalid --pprof-url %q: %w", raw, err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", fmt.Errorf("--pprof-url must use http or https (got %q)", raw)
+	}
+	if strings.TrimSpace(u.Host) == "" {
+		return "", fmt.Errorf("--pprof-url must include host:port (got %q)", raw)
+	}
+
+	cleanPath := strings.TrimSuffix(u.Path, "/")
+	if strings.HasSuffix(cleanPath, "/debug/pprof") {
+		cleanPath = strings.TrimSuffix(cleanPath, "/debug/pprof")
+	}
+	if cleanPath == "/debug/pprof" {
+		cleanPath = ""
+	}
+	u.Path = cleanPath
+	u.RawPath = ""
+	u.RawQuery = ""
+	u.Fragment = ""
+
+	return strings.TrimSuffix(u.String(), "/"), nil
 }
 
 func fetchRelease(ctx context.Context, client *http.Client, repo, version, token string) (githubRelease, error) {

@@ -30,6 +30,7 @@ throttle-burst: 10
 min-level: medium
 verbose: true
 stats-interval: 30
+pprof-listen: 127.0.0.1:6060
 `
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
@@ -66,6 +67,9 @@ stats-interval: 30
 	}
 	if params.MinLevel != "medium" || params.StatsInterval != 30 {
 		t.Fatalf("min-level/stats settings not applied: min-level=%q stats=%d", params.MinLevel, params.StatsInterval)
+	}
+	if params.PprofListen != "127.0.0.1:6060" {
+		t.Fatalf("PprofListen = %q, want 127.0.0.1:6060", params.PprofListen)
 	}
 }
 
