@@ -21,27 +21,34 @@ type EventConsumer interface {
 // Distributor receives events from providers, applies enrichment, and
 // forwards them to registered consumers.
 type Distributor struct {
-	mu         sync.RWMutex
-	enricher   *enrichment.EventEnricher
-	consumers  []EventConsumer
-	correlator *enrichment.Correlator
+	mu        sync.RWMutex
+	enricher  *enrichment.EventEnricher
+	consumers []EventConsumer
+	// consumersView stores an immutable []EventConsumer snapshot for
+	// allocation-free reads on the hot path.
+	consumersView atomic.Value
+	correlator    *enrichment.Correlator
 
 	processed atomic.Uint64
 }
 
 // New creates a new Distributor with the given enricher and correlator.
 func New(enricher *enrichment.EventEnricher, correlator *enrichment.Correlator) *Distributor {
-	return &Distributor{
+	d := &Distributor{
 		enricher:   enricher,
 		correlator: correlator,
 	}
+	d.consumersView.Store([]EventConsumer(nil))
+	return d
 }
 
 // RegisterConsumer adds a consumer to receive events.
 func (d *Distributor) RegisterConsumer(c EventConsumer) {
 	d.mu.Lock()
-	defer d.mu.Unlock()
 	d.consumers = append(d.consumers, c)
+	snapshot := append([]EventConsumer(nil), d.consumers...)
+	d.mu.Unlock()
+	d.consumersView.Store(snapshot)
 }
 
 // HandleEvent is the callback passed to providers. It enriches the event
@@ -76,9 +83,13 @@ func (d *Distributor) HandleEvent(event provider.Event) {
 }
 
 func (d *Distributor) snapshotConsumers() []EventConsumer {
+	if cur, ok := d.consumersView.Load().([]EventConsumer); ok {
+		return cur
+	}
+
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	return append([]EventConsumer(nil), d.consumers...)
+	return d.consumers
 }
 
 // cacheProcessData stores process info for parent correlation on process_creation events.

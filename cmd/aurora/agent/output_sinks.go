@@ -25,8 +25,7 @@ func (h *formattedOutputHook) Fire(entry *log.Entry) error {
 		return nil
 	}
 
-	dup := entry.Dup()
-	line, err := h.formatter.Format(dup)
+	line, err := h.formatter.Format(entry)
 	if err != nil {
 		return err
 	}

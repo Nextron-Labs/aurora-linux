@@ -36,6 +36,7 @@ type ruleMetadata struct {
 type ruleFieldPattern struct {
 	Modifiers []string
 	Pattern   string
+	Matcher   sigmaengine.StringMatcher
 }
 
 type fieldPatternMatch struct {
@@ -71,7 +72,7 @@ func buildRuleMetadata(tree *sigmaengine.Tree) ruleMetadata {
 	meta.Tags = append([]string(nil), rule.Tags...)
 	meta.FalsePositives = append([]string(nil), rule.Falsepositives...)
 	meta.NoCollapseWS = rule.NoCollapseWS
-	meta.FieldPatterns = extractDetectionFieldPatterns(rule.Detection)
+	meta.FieldPatterns = extractDetectionFieldPatterns(rule.Detection, meta.NoCollapseWS)
 	meta.Date, meta.Modified = readRuleDateMetadata(rule.Path)
 	return meta
 }
@@ -365,36 +366,18 @@ func (m ruleMetadata) matchingRulePatterns(field, eventValue string) []string {
 
 	out := make([]string, 0)
 	for _, candidate := range candidates {
-		if candidate.matches(eventValue, m.NoCollapseWS) {
+		if candidate.matches(eventValue) {
 			out = append(out, candidate.Pattern)
 		}
 	}
 	return uniqueStrings(out)
 }
 
-func (p ruleFieldPattern) matches(eventValue string, noCollapseWS bool) bool {
-	modifier := sigmaengine.TextPatternNone
-	all := false
-	for _, cur := range p.Modifiers {
-		switch strings.ToLower(strings.TrimSpace(cur)) {
-		case "contains":
-			modifier = sigmaengine.TextPatternContains
-		case "startswith":
-			modifier = sigmaengine.TextPatternPrefix
-		case "endswith":
-			modifier = sigmaengine.TextPatternSuffix
-		case "re":
-			modifier = sigmaengine.TextPatternRegex
-		case "all":
-			all = true
-		}
-	}
-
-	matcher, err := sigmaengine.NewStringMatcher(modifier, false, all, noCollapseWS, p.Pattern)
-	if err != nil {
+func (p ruleFieldPattern) matches(eventValue string) bool {
+	if p.Matcher == nil {
 		return false
 	}
-	return matcher.StringMatch(eventValue)
+	return p.Matcher.StringMatch(eventValue)
 }
 
 func describeStringMatcherPatterns(matcher sigmaengine.StringMatcher, value string) []string {
@@ -512,7 +495,7 @@ func uniqueStrings(in []string) []string {
 	return out
 }
 
-func extractDetectionFieldPatterns(detection sigmaengine.Detection) map[string][]ruleFieldPattern {
+func extractDetectionFieldPatterns(detection sigmaengine.Detection, noCollapseWS bool) map[string][]ruleFieldPattern {
 	if len(detection) == 0 {
 		return nil
 	}
@@ -522,7 +505,7 @@ func extractDetectionFieldPatterns(detection sigmaengine.Detection) map[string][
 		if strings.EqualFold(key, "condition") {
 			continue
 		}
-		collectFieldPatternsFromSelectionValue(out, value)
+		collectFieldPatternsFromSelectionValue(out, value, noCollapseWS)
 	}
 	if len(out) == 0 {
 		return nil
@@ -530,11 +513,11 @@ func extractDetectionFieldPatterns(detection sigmaengine.Detection) map[string][
 	return out
 }
 
-func collectFieldPatternsFromSelectionValue(dst map[string][]ruleFieldPattern, value interface{}) {
+func collectFieldPatternsFromSelectionValue(dst map[string][]ruleFieldPattern, value interface{}, noCollapseWS bool) {
 	switch cur := value.(type) {
 	case map[string]interface{}:
 		for selector, patternValue := range cur {
-			collectFieldPatternEntry(dst, selector, patternValue)
+			collectFieldPatternEntry(dst, selector, patternValue, noCollapseWS)
 		}
 	case map[interface{}]interface{}:
 		for rawSelector, patternValue := range cur {
@@ -542,19 +525,19 @@ func collectFieldPatternsFromSelectionValue(dst map[string][]ruleFieldPattern, v
 			if !ok {
 				continue
 			}
-			collectFieldPatternEntry(dst, selector, patternValue)
+			collectFieldPatternEntry(dst, selector, patternValue, noCollapseWS)
 		}
 	case []interface{}:
 		for _, inner := range cur {
-			collectFieldPatternsFromSelectionValue(dst, inner)
+			collectFieldPatternsFromSelectionValue(dst, inner, noCollapseWS)
 		}
 	}
 }
 
-func collectFieldPatternEntry(dst map[string][]ruleFieldPattern, selector string, value interface{}) {
+func collectFieldPatternEntry(dst map[string][]ruleFieldPattern, selector string, value interface{}, noCollapseWS bool) {
 	field, modifiers := parseFieldSelector(selector)
 	if field == "" {
-		collectFieldPatternsFromSelectionValue(dst, value)
+		collectFieldPatternsFromSelectionValue(dst, value, noCollapseWS)
 		return
 	}
 
@@ -563,10 +546,7 @@ func collectFieldPatternEntry(dst map[string][]ruleFieldPattern, selector string
 			return
 		}
 		key := strings.ToLower(field)
-		dst[key] = append(dst[key], ruleFieldPattern{
-			Modifiers: append([]string(nil), modifiers...),
-			Pattern:   pattern,
-		})
+		dst[key] = append(dst[key], newRuleFieldPattern(modifiers, pattern, noCollapseWS))
 	}
 
 	switch cur := value.(type) {
@@ -582,14 +562,48 @@ func collectFieldPatternEntry(dst map[string][]ruleFieldPattern, selector string
 		for _, item := range cur {
 			switch inner := item.(type) {
 			case map[string]interface{}, map[interface{}]interface{}, []interface{}:
-				collectFieldPatternsFromSelectionValue(dst, inner)
+				collectFieldPatternsFromSelectionValue(dst, inner, noCollapseWS)
 			default:
 				appendPattern(fmt.Sprint(inner))
 			}
 		}
 	case map[string]interface{}, map[interface{}]interface{}:
-		collectFieldPatternsFromSelectionValue(dst, cur)
+		collectFieldPatternsFromSelectionValue(dst, cur, noCollapseWS)
 	}
+}
+
+func newRuleFieldPattern(modifiers []string, pattern string, noCollapseWS bool) ruleFieldPattern {
+	p := ruleFieldPattern{
+		Modifiers: append([]string(nil), modifiers...),
+		Pattern:   pattern,
+	}
+
+	modifier, all := textPatternFromModifiers(modifiers)
+	matcher, err := sigmaengine.NewStringMatcher(modifier, false, all, noCollapseWS, pattern)
+	if err == nil {
+		p.Matcher = matcher
+	}
+	return p
+}
+
+func textPatternFromModifiers(modifiers []string) (sigmaengine.TextPatternModifier, bool) {
+	modifier := sigmaengine.TextPatternNone
+	all := false
+	for _, cur := range modifiers {
+		switch strings.ToLower(strings.TrimSpace(cur)) {
+		case "contains":
+			modifier = sigmaengine.TextPatternContains
+		case "startswith":
+			modifier = sigmaengine.TextPatternPrefix
+		case "endswith":
+			modifier = sigmaengine.TextPatternSuffix
+		case "re":
+			modifier = sigmaengine.TextPatternRegex
+		case "all":
+			all = true
+		}
+	}
+	return modifier, all
 }
 
 func parseFieldSelector(selector string) (string, []string) {

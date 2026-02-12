@@ -230,9 +230,11 @@ func (s *SigmaConsumer) emitMatch(event provider.Event, result sigma.Result) {
 
 	logLevel := sigmaRuleLevelToLogLevel(ruleLevel)
 	if s.logger != nil {
-		s.logger.WithFields(fields).Log(logLevel, "Sigma match")
+		entry := log.Entry{Logger: s.logger, Data: fields}
+		entry.Log(logLevel, "Sigma match")
 	} else {
-		log.WithFields(fields).Log(logLevel, "Sigma match")
+		entry := log.Entry{Logger: log.StandardLogger(), Data: fields}
+		entry.Log(logLevel, "Sigma match")
 	}
 }
 

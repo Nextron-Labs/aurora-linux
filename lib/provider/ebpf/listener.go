@@ -287,8 +287,9 @@ func (l *Listener) SendEvents(callback func(event provider.Event)) {
 func (l *Listener) readExecEvents(callback func(event provider.Event)) {
 	defer l.wg.Done()
 
+	var record ringbuf.Record
 	for {
-		record, err := l.execReader.Read()
+		err := l.execReader.ReadInto(&record)
 		if err != nil {
 			if errors.Is(err, ringbuf.ErrClosed) {
 				return
@@ -315,8 +316,9 @@ func (l *Listener) readExecEvents(callback func(event provider.Event)) {
 func (l *Listener) readFileEvents(callback func(event provider.Event)) {
 	defer l.wg.Done()
 
+	var record ringbuf.Record
 	for {
-		record, err := l.fileReader.Read()
+		err := l.fileReader.ReadInto(&record)
 		if err != nil {
 			if errors.Is(err, ringbuf.ErrClosed) {
 				return
@@ -343,8 +345,9 @@ func (l *Listener) readFileEvents(callback func(event provider.Event)) {
 func (l *Listener) readNetEvents(callback func(event provider.Event)) {
 	defer l.wg.Done()
 
+	var record ringbuf.Record
 	for {
-		record, err := l.netReader.Read()
+		err := l.netReader.ReadInto(&record)
 		if err != nil {
 			if errors.Is(err, ringbuf.ErrClosed) {
 				return
