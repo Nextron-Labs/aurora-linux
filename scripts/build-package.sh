@@ -109,4 +109,4 @@ fi
 
 echo "wrote ${archive_path}"
 echo "archive preview:"
-tar -tzf "${archive_path}" | head
+tar -tzf "${archive_path}" | sed -n '1,10p'
