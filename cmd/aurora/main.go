@@ -13,7 +13,7 @@ import (
 	"github.com/spf13/pflag"
 )
 
-var version = "0.1.2"
+var version = "0.1.3"
 
 func main() {
 	params := agent.DefaultParameters()
@@ -86,7 +86,7 @@ func main() {
 func helpLong(version string) string {
 	prettyVersion := strings.TrimSpace(version)
 	if prettyVersion == "" {
-		prettyVersion = "0.1.2"
+		prettyVersion = "0.1.3"
 	}
 	if !strings.HasPrefix(strings.ToLower(prettyVersion), "v") {
 		prettyVersion = "v" + prettyVersion
