@@ -37,8 +37,8 @@ jobs:
           has_working_bpftool() {
             local output
             [[ -x "${1:-}" ]] || return 1
-            output="$("${1}" help 2>/dev/null)" || return 1
-            [[ "${output}" == *"Usage: bpftool"* ]]
+            output="$("${1}" version 2>/dev/null)" || return 1
+            [[ "${output}" == *"libbpf"* ]]
           }
           first_working_bpftool() {
             for candidate in "$@"; do
