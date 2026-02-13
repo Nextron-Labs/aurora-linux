@@ -57,6 +57,8 @@ jobs:
             bpftool \
             "linux-tools-$(uname -r)" \
             "linux-cloud-tools-$(uname -r)" \
+            linux-tools-generic \
+            linux-cloud-tools-generic \
             linux-tools-azure \
             linux-cloud-tools-azure \
             linux-tools-common
