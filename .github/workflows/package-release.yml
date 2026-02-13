@@ -71,7 +71,7 @@ jobs:
             sudo apt-get install -y "${pkg}" || true
           done
           if ! have_bpftool; then
-            BPFTOOL_BIN="$(find /usr/lib -type f -path '*/linux-tools*/bpftool' 2>/dev/null | head -n 1)"
+            BPFTOOL_BIN="$(find /usr -type f -name bpftool ! -path '/usr/sbin/bpftool' 2>/dev/null | head -n 1)"
             if [[ -n "${BPFTOOL_BIN}" ]]; then
               sudo ln -sf "${BPFTOOL_BIN}" /usr/local/bin/bpftool
             fi
