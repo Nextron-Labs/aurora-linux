@@ -55,7 +55,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang llvm libbpf-dev
           has_working_bpftool() {
-            [[ -x "${1:-}" ]] && "${1}" version >/dev/null 2>&1
+            local output
+            [[ -x "${1:-}" ]] || return 1
+            output="$("${1}" version 2>/dev/null)" || return 1
+            [[ "${output}" == *"bpftool"* ]]
           }
           first_working_bpftool() {
             for candidate in "$@"; do
@@ -82,7 +85,7 @@ jobs:
               break
             fi
             sudo apt-get install -y "${pkg}" || true
-            mapfile -t BPFTOOL_CANDIDATES < <(find /usr -type f -name 'bpftool*' 2>/dev/null | sort -u)
+            mapfile -t BPFTOOL_CANDIDATES < <(find /usr/bin /usr/sbin /usr/local/bin /usr/local/sbin /usr/lib -type f -name 'bpftool*' 2>/dev/null | sort -u)
             if candidate="$(first_working_bpftool "${BPFTOOL_CANDIDATES[@]}")"; then
               BPFTOOL_CMD="${candidate}"
             fi
@@ -98,7 +101,7 @@ jobs:
               BPFTOOL_URL="https://github.com/libbpf/bpftool/releases/download/${BPFTOOL_VERSION}/bpftool-${BPFTOOL_VERSION}-${BPFTOOL_ARCH}.tar.gz"
               tmpdir="$(mktemp -d)"
               if curl -fsSL "${BPFTOOL_URL}" -o "${tmpdir}/bpftool.tgz" && tar -xzf "${tmpdir}/bpftool.tgz" -C "${tmpdir}"; then
-                mapfile -t BPFTOOL_CANDIDATES < <(find "${tmpdir}" -type f -perm -111 2>/dev/null | sort -u)
+                mapfile -t BPFTOOL_CANDIDATES < <(find "${tmpdir}" -type f -name 'bpftool*' -perm -111 2>/dev/null | sort -u)
                 if candidate="$(first_working_bpftool "${BPFTOOL_CANDIDATES[@]}")"; then
                   sudo install -m 0755 "${candidate}" /usr/local/bin/bpftool-ci
                   BPFTOOL_CMD="/usr/local/bin/bpftool-ci"
@@ -110,7 +113,7 @@ jobs:
           if [[ -z "${BPFTOOL_CMD}" ]]; then
             echo "Unable to locate a working bpftool binary"
             command -v bpftool || true
-            find /usr -type f -name 'bpftool*' 2>/dev/null | head -n 20 || true
+            find /usr/bin /usr/sbin /usr/local/bin /usr/local/sbin /usr/lib -type f -name 'bpftool*' 2>/dev/null | head -n 20 || true
             exit 1
           fi
           echo "BPFTOOL_CMD=${BPFTOOL_CMD}" >> "${GITHUB_ENV}"
