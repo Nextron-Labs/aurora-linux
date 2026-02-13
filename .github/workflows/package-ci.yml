@@ -34,12 +34,24 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y clang llvm libbpf-dev
-          if ! sudo apt-get install -y bpftool; then
-            echo "bpftool package unavailable, falling back to linux-tools-common"
-            sudo apt-get install -y linux-tools-common
-          fi
-          if ! command -v bpftool >/dev/null 2>&1; then
-            BPFTOOL_BIN="$(find /usr/lib/linux-tools -type f -name bpftool 2>/dev/null | head -n 1)"
+          have_bpftool() {
+            command -v bpftool >/dev/null 2>&1 && bpftool version >/dev/null 2>&1
+          }
+          for pkg in \
+            bpftool \
+            "linux-tools-$(uname -r)" \
+            "linux-cloud-tools-$(uname -r)" \
+            linux-tools-azure \
+            linux-cloud-tools-azure \
+            linux-tools-common
+          do
+            if have_bpftool; then
+              break
+            fi
+            sudo apt-get install -y "${pkg}" || true
+          done
+          if ! have_bpftool; then
+            BPFTOOL_BIN="$(find /usr/lib -type f -path '*/linux-tools*/bpftool' 2>/dev/null | head -n 1)"
             if [[ -n "${BPFTOOL_BIN}" ]]; then
               sudo ln -sf "${BPFTOOL_BIN}" /usr/local/bin/bpftool
             fi
