@@ -62,7 +62,7 @@ go generate ./lib/provider/ebpf/
 # 3. Build the binary
 go build -o aurora ./cmd/aurora/
 
-# 4. Build the update utility (optional)
+# 4. Build `aurora-util` (maintenance + debugging, optional)
 go build -o aurora-util ./cmd/aurora-util/
 ```
 
@@ -131,9 +131,11 @@ The installer:
 - updates Sigma signatures (unless `--skip-signature-update`)
 - enables and starts `aurora`
 
-### Update Utility
+## Aurora Utility (`aurora-util`)
 
-`aurora-util` automates update tasks:
+`aurora-util` is the companion utility for both operations and debugging workflows.
+
+### Maintenance and Upgrade
 
 ```bash
 # Refresh Sigma Linux rules from SigmaHQ releases
@@ -141,7 +143,11 @@ sudo ./aurora-util update-signatures
 
 # Upgrade aurora from Aurora-Linux GitHub releases
 sudo ./aurora-util upgrade-aurora
+```
 
+### Debugging and Profiling
+
+```bash
 # Collect CPU (30s) + heap profiles from a running aurora instance
 sudo ./aurora-util collect-profile --pprof-url http://127.0.0.1:6060 --output-dir /tmp/aurora-profiles
 ```
@@ -289,7 +295,7 @@ Aurora Linux follows a **provider → distributor → consumer** pipeline:
 ```
 aurora-linux/
 ├── cmd/aurora/                CLI entry point (cobra)
-├── cmd/aurora-util/           Release update utility (signatures + binary)
+├── cmd/aurora-util/           Utility CLI for maintenance and debugging workflows
 ├── scripts/                   Install + maintenance automation
 ├── lib/
 │   ├── provider/ebpf/         eBPF listener + BPF C programs
