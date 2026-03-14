@@ -30,8 +30,8 @@ func TestFormattedOutputHookFireWritesFormattedEntry(t *testing.T) {
 	}
 
 	out := buf.String()
-	if !strings.Contains(out, `"message":"test alert"`) {
-		t.Fatalf("expected message in output, got %q", out)
+	if !strings.Contains(out, `"msg":"test alert"`) {
+		t.Fatalf("expected msg in output, got %q", out)
 	}
 	if !strings.Contains(out, `"key":"value"`) {
 		t.Fatalf("expected data field in output, got %q", out)

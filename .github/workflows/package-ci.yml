@@ -8,8 +8,130 @@ on:
   workflow_dispatch:
 
 jobs:
+  test:
+    name: Test (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - ubuntu-22.04
+          - ubuntu-24.04
+          - ubuntu-22.04-arm
+          - ubuntu-24.04-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install BPF build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm libbpf-dev build-essential pkg-config zlib1g-dev
+          has_working_bpftool() {
+            local output
+            [[ -x "${1:-}" ]] || return 1
+            output="$("${1}" version 2>/dev/null)" || return 1
+            [[ "${output}" == *"libbpf"* ]]
+          }
+          first_working_bpftool() {
+            for candidate in "$@"; do
+              if has_working_bpftool "${candidate}"; then
+                echo "${candidate}"
+                return 0
+              fi
+            done
+            return 1
+          }
+          BPFTOOL_CMD=""
+          if candidate="$(command -v bpftool 2>/dev/null)" && has_working_bpftool "${candidate}"; then
+            BPFTOOL_CMD="${candidate}"
+          fi
+          for pkg in \
+            bpftool \
+            "linux-tools-$(uname -r)" \
+            "linux-cloud-tools-$(uname -r)" \
+            linux-tools-generic \
+            linux-cloud-tools-generic \
+            linux-tools-azure \
+            linux-cloud-tools-azure \
+            linux-tools-common
+          do
+            if [[ -n "${BPFTOOL_CMD}" ]]; then
+              break
+            fi
+            sudo apt-get install -y "${pkg}" || true
+            mapfile -t BPFTOOL_CANDIDATES < <(find /usr/bin /usr/sbin /usr/local/bin /usr/local/sbin /usr/lib -type f -name 'bpftool*' 2>/dev/null | sort -u)
+            if candidate="$(first_working_bpftool "${BPFTOOL_CANDIDATES[@]}")"; then
+              BPFTOOL_CMD="${candidate}"
+            fi
+          done
+          if [[ -z "${BPFTOOL_CMD}" ]]; then
+            case "$(uname -m)" in
+              x86_64|amd64) BPFTOOL_ARCH="amd64" ;;
+              aarch64|arm64) BPFTOOL_ARCH="arm64" ;;
+              *) BPFTOOL_ARCH="" ;;
+            esac
+            if [[ -n "${BPFTOOL_ARCH}" ]]; then
+              BPFTOOL_VERSION="v7.6.0"
+              BPFTOOL_URL="https://github.com/libbpf/bpftool/releases/download/${BPFTOOL_VERSION}/bpftool-${BPFTOOL_VERSION}-${BPFTOOL_ARCH}.tar.gz"
+              tmpdir="$(mktemp -d)"
+              if curl -fsSL "${BPFTOOL_URL}" -o "${tmpdir}/bpftool.tgz" && tar -xzf "${tmpdir}/bpftool.tgz" -C "${tmpdir}"; then
+                mapfile -t BPFTOOL_CANDIDATES < <(find "${tmpdir}" -type f -perm -111 2>/dev/null | sort -u)
+                if candidate="$(first_working_bpftool "${BPFTOOL_CANDIDATES[@]}")"; then
+                  sudo install -m 0755 "${candidate}" /usr/local/bin/bpftool-ci
+                  BPFTOOL_CMD="/usr/local/bin/bpftool-ci"
+                fi
+              fi
+              rm -rf "${tmpdir}"
+            fi
+          fi
+          if [[ -z "${BPFTOOL_CMD}" ]]; then
+            BPFTOOL_VERSION="v7.6.0"
+            BPFTOOL_SRC_URL="https://github.com/libbpf/bpftool/releases/download/${BPFTOOL_VERSION}/bpftool-libbpf-${BPFTOOL_VERSION}-sources.tar.gz"
+            tmpdir="$(mktemp -d)"
+            if curl -fsSL "${BPFTOOL_SRC_URL}" -o "${tmpdir}/bpftool-src.tgz" && tar -xzf "${tmpdir}/bpftool-src.tgz" -C "${tmpdir}"; then
+              mapfile -t BPFTOOL_BUILD_DIRS < <(find "${tmpdir}" -type f -name Makefile -path '*/src/Makefile' -exec dirname {} \; | sort -u)
+              for build_dir in "${BPFTOOL_BUILD_DIRS[@]}"; do
+                if make -C "${build_dir}" -j"$(nproc)"; then
+                  mapfile -t BPFTOOL_CANDIDATES < <(find "${build_dir}" "${tmpdir}" -type f -name bpftool -perm -111 2>/dev/null | sort -u)
+                  if candidate="$(first_working_bpftool "${BPFTOOL_CANDIDATES[@]}")"; then
+                    sudo install -m 0755 "${candidate}" /usr/local/bin/bpftool-ci
+                    BPFTOOL_CMD="/usr/local/bin/bpftool-ci"
+                    break
+                  fi
+                fi
+              done
+            fi
+            rm -rf "${tmpdir}"
+          fi
+          if [[ -z "${BPFTOOL_CMD}" ]]; then
+            echo "Unable to locate a working bpftool binary"
+            command -v bpftool || true
+            find /usr/bin /usr/sbin /usr/local/bin /usr/local/sbin /usr/lib -type f -name 'bpftool*' 2>/dev/null | head -n 20 || true
+            exit 1
+          fi
+          echo "BPFTOOL_CMD=${BPFTOOL_CMD}" >> "${GITHUB_ENV}"
+          "${BPFTOOL_CMD}" version
+
+      - name: Generate eBPF bindings
+        run: |
+          mkdir -p lib/provider/ebpf/bpf/headers
+          "${BPFTOOL_CMD:-bpftool}" btf dump file /sys/kernel/btf/vmlinux format c > lib/provider/ebpf/bpf/vmlinux.h
+          go generate ./lib/provider/ebpf
+
+      - name: Run tests
+        run: go test -race -count=1 ./...
+
   package:
     name: Build package (${{ matrix.goarch }})
+    needs: test
     runs-on: ubuntu-22.04
     permissions:
       contents: read
