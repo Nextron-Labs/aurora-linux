@@ -44,6 +44,58 @@ func TestAllowMatchEnabledThrottleLimitsBurst(t *testing.T) {
 	}
 }
 
+func TestAllowMatchPerRuleIsolation(t *testing.T) {
+	consumer := New(Config{
+		ThrottleRate:  0.001, // very slow refill
+		ThrottleBurst: 1,
+	})
+
+	// Rule-A uses its burst.
+	if !consumer.allowMatch("rule-A") {
+		t.Fatal("rule-A first match should be allowed")
+	}
+	if consumer.allowMatch("rule-A") {
+		t.Fatal("rule-A second match should be throttled")
+	}
+
+	// Rule-B should have its own separate limiter.
+	if !consumer.allowMatch("rule-B") {
+		t.Fatal("rule-B first match should be allowed (independent of rule-A)")
+	}
+	if consumer.allowMatch("rule-B") {
+		t.Fatal("rule-B second match should be throttled")
+	}
+}
+
+func TestAllowMatchBurstSizeRespected(t *testing.T) {
+	consumer := New(Config{
+		ThrottleRate:  0.001, // very slow refill
+		ThrottleBurst: 3,
+	})
+
+	// Should allow exactly 3 matches in burst.
+	for i := 0; i < 3; i++ {
+		if !consumer.allowMatch("rule-1") {
+			t.Fatalf("match %d should be allowed within burst of 3", i+1)
+		}
+	}
+	// 4th should be throttled.
+	if consumer.allowMatch("rule-1") {
+		t.Fatal("4th match should be throttled (burst=3)")
+	}
+}
+
+func TestAllowMatchDefaultBurstWhenNotSet(t *testing.T) {
+	consumer := New(Config{
+		ThrottleRate:  1.0,
+		ThrottleBurst: 0, // should default to 5
+	})
+
+	if consumer.throttleBurst != 5 {
+		t.Fatalf("default burst = %d, want 5", consumer.throttleBurst)
+	}
+}
+
 func TestInitializeWithRulesFailsWhenNoRulesAreLoadable(t *testing.T) {
 	ruleDir := t.TempDir()
 	badRulePath := filepath.Join(ruleDir, "bad.yml")
