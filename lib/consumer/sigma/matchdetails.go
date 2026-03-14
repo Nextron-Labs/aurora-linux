@@ -9,7 +9,7 @@ import (
 	"time"
 
 	sigmaengine "github.com/markuskont/go-sigma-rule-engine"
-	"github.com/nicholasgasior/aurora-linux/lib/provider"
+	"github.com/Nextron-Labs/aurora-linux/lib/provider"
 	log "github.com/sirupsen/logrus"
 	yaml "gopkg.in/yaml.v2"
 )

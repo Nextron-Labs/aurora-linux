@@ -110,7 +110,7 @@ func main() {
 			return runUpgradeAurora(ctx, upOpts)
 		},
 	}
-	upgradeCmd.Flags().StringVar(&upOpts.Repo, "repo", "nicholasgasior/aurora-linux", "GitHub repository in owner/repo format")
+	upgradeCmd.Flags().StringVar(&upOpts.Repo, "repo", "Nextron-Labs/aurora-linux", "GitHub repository in owner/repo format")
 	upgradeCmd.Flags().StringVar(&upOpts.Version, "version", "latest", "Release tag to fetch (or \"latest\")")
 	upgradeCmd.Flags().StringVar(&upOpts.InstallPath, "install-path", "/opt/aurora-linux/aurora", "Destination path for the aurora binary")
 	upgradeCmd.Flags().StringVar(&upOpts.TargetOS, "os", runtime.GOOS, "Target operating system used for release asset matching")

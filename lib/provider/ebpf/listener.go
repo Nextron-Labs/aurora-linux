@@ -13,8 +13,8 @@ import (
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
-	"github.com/nicholasgasior/aurora-linux/lib/enrichment"
-	"github.com/nicholasgasior/aurora-linux/lib/provider"
+	"github.com/Nextron-Labs/aurora-linux/lib/enrichment"
+	"github.com/Nextron-Labs/aurora-linux/lib/provider"
 	log "github.com/sirupsen/logrus"
 )
 

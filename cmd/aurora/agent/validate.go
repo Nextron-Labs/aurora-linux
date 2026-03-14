@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	sigmaconsumer "github.com/nicholasgasior/aurora-linux/lib/consumer/sigma"
+	sigmaconsumer "github.com/Nextron-Labs/aurora-linux/lib/consumer/sigma"
 )
 
 // ValidateParameters performs user-facing configuration validation before

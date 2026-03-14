@@ -1898,7 +1898,7 @@ network_connection Sigma rules (crypto mining, ngrok, localtonet).
 
 | # | Task | Package | Notes |
 |---|---|---|---|
-| 1 | Initialize Go module (`go mod init`) | root | Module path: `github.com/nicholasgasior/aurora-linux` (or chosen org) |
+| 1 | Initialize Go module (`go mod init`) | root | Module path: `github.com/Nextron-Labs/aurora-linux` (or chosen org) |
 | 2 | Write BPF C program `exec_monitor.c` | `lib/provider/ebpf/bpf/` | Tracepoint attachment, struct, ring buffer, lost counter |
 | 3 | Run `bpf2go` code generation | `lib/provider/ebpf/` | `//go:generate` directive, check in `.go` + `.o` |
 | 4 | Implement `EventProvider` interface | `lib/provider/ebpf/listener.go` | `Initialize`, `Close`, `AddSource`, `SendEvents`, `LostEvents` |

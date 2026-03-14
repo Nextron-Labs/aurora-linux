@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nicholasgasior/aurora-linux/cmd/aurora/agent"
+	"github.com/Nextron-Labs/aurora-linux/cmd/aurora/agent"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )

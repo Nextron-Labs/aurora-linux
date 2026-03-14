@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/nicholasgasior/aurora-linux/lib/enrichment"
+	"github.com/Nextron-Labs/aurora-linux/lib/enrichment"
 )
 
 // joinCmdline converts NUL-separated /proc/PID/cmdline bytes into a

@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/nicholasgasior/aurora-linux/lib/provider"
+	"github.com/Nextron-Labs/aurora-linux/lib/provider"
 )
 
 func TestReplayProviderRespectsSourceFilters(t *testing.T) {

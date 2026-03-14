@@ -3,7 +3,7 @@ package distributor
 import (
 	"strconv"
 
-	"github.com/nicholasgasior/aurora-linux/lib/enrichment"
+	"github.com/Nextron-Labs/aurora-linux/lib/enrichment"
 )
 
 // RegisterLinuxEnrichments registers all Linux-specific enrichment functions

@@ -1,4 +1,4 @@
-module github.com/nicholasgasior/aurora-linux
+module github.com/Nextron-Labs/aurora-linux
 
 go 1.24.0
 
