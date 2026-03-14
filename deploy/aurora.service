@@ -4,16 +4,16 @@ After=network.target
 
 [Service]
 Type=simple
-Environment=AURORA_RULES_DIR=/opt/aurora-linux/sigma-rules/rules/linux
+Environment=AURORA_RULES_DIR=/opt/aurora-linux/sigma-rules/linux
 Environment=AURORA_LOG_FILE=/var/log/aurora-linux/aurora.log
 Environment=AURORA_OUTPUT_FLAG=--json
 Environment=AURORA_EXTRA_ARGS=
 EnvironmentFile=-/opt/aurora-linux/config/aurora.env
-ExecStart=/opt/aurora-linux/aurora \
-    --rules ${AURORA_RULES_DIR} \
-    --logfile ${AURORA_LOG_FILE} \
-    ${AURORA_OUTPUT_FLAG} \
-    ${AURORA_EXTRA_ARGS}
+ExecStart=/bin/bash -c 'exec /opt/aurora-linux/aurora \
+    --rules "$AURORA_RULES_DIR" \
+    --logfile "$AURORA_LOG_FILE" \
+    $AURORA_OUTPUT_FLAG \
+    $AURORA_EXTRA_ARGS'
 Restart=on-failure
 RestartSec=5
 
