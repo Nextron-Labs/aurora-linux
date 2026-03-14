@@ -71,7 +71,7 @@ func (d *Distributor) HandleEvent(event provider.Event) {
 
 	// Forward to all consumers
 	for _, c := range consumers {
-		if err := c.HandleEvent(event); err != nil {
+		if err := safeHandleEvent(c, event); err != nil {
 			log.WithFields(log.Fields{
 				"consumer": c.Name(),
 				"error":    err,
@@ -121,6 +121,17 @@ func (d *Distributor) Processed() uint64 {
 // Correlator returns the correlator for use by enrichment functions.
 func (d *Distributor) Correlator() *enrichment.Correlator {
 	return d.correlator
+}
+
+// safeHandleEvent wraps a consumer's HandleEvent in panic recovery so that
+// a single misbehaving consumer cannot crash the entire event pipeline.
+func safeHandleEvent(c EventConsumer, event provider.Event) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic in consumer %s: %v", c.Name(), r)
+		}
+	}()
+	return c.HandleEvent(event)
 }
 
 func enrichmentKey(id provider.EventIdentifier) string {
