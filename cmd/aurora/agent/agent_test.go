@@ -258,3 +258,276 @@ func (s *stubEvent) Value(fieldname string) enrichment.DataValue {
 	return s.fields.Value(fieldname)
 }
 func (s *stubEvent) ForEach(fn func(key string, value string)) { s.fields.ForEach(fn) }
+
+func TestTraceEventLogsAllFields(t *testing.T) {
+	// Capture log output
+	var buf strings.Builder
+	logger := log.New()
+	logger.SetOutput(&buf)
+	logger.SetLevel(log.DebugLevel)
+	log.SetOutput(&buf)
+	log.SetLevel(log.DebugLevel)
+	defer func() {
+		log.SetOutput(os.Stderr)
+		log.SetLevel(log.InfoLevel)
+	}()
+
+	a := New(Parameters{Trace: true})
+
+	evt := &stubEvent{
+		id: provider.EventIdentifier{
+			ProviderName: "LinuxEBPF",
+			EventID:      1,
+		},
+		source: "LinuxEBPF:ProcessExec",
+		fields: enrichment.DataFieldsMap{
+			"Image":       enrichment.NewStringValue("/usr/bin/bash"),
+			"CommandLine": enrichment.NewStringValue("bash -c echo"),
+			"ProcessId":   enrichment.NewStringValue("1234"),
+		},
+	}
+
+	a.traceEvent(evt)
+
+	output := buf.String()
+	if !strings.Contains(output, "Trace event") {
+		t.Fatalf("expected 'Trace event' in output, got: %s", output)
+	}
+	if !strings.Contains(output, "LinuxEBPF") {
+		t.Fatalf("expected 'LinuxEBPF' in output, got: %s", output)
+	}
+}
+
+func TestShouldExcludeEventWithEmptyFilter(t *testing.T) {
+	a := New(Parameters{ProcessExclude: ""})
+
+	evt := &stubEvent{
+		id:     provider.EventIdentifier{ProviderName: "LinuxEBPF", EventID: 1},
+		source: "LinuxEBPF:ProcessExec",
+		fields: enrichment.DataFieldsMap{
+			"Image": enrichment.NewStringValue("/usr/bin/bash"),
+		},
+	}
+
+	if a.shouldExcludeEvent(evt) {
+		t.Fatal("shouldExcludeEvent() with empty filter should return false")
+	}
+}
+
+func TestShouldExcludeEventWithWhitespaceFilter(t *testing.T) {
+	a := New(Parameters{ProcessExclude: "   "})
+
+	evt := &stubEvent{
+		id:     provider.EventIdentifier{ProviderName: "LinuxEBPF", EventID: 1},
+		source: "LinuxEBPF:ProcessExec",
+		fields: enrichment.DataFieldsMap{
+			"Image": enrichment.NewStringValue("/usr/bin/bash"),
+		},
+	}
+
+	if a.shouldExcludeEvent(evt) {
+		t.Fatal("shouldExcludeEvent() with whitespace filter should return false")
+	}
+}
+
+func TestShouldExcludeEventMatchesParentFields(t *testing.T) {
+	a := New(Parameters{ProcessExclude: "systemd"})
+
+	evt := &stubEvent{
+		id:     provider.EventIdentifier{ProviderName: "LinuxEBPF", EventID: 1},
+		source: "LinuxEBPF:ProcessExec",
+		fields: enrichment.DataFieldsMap{
+			"Image":              enrichment.NewStringValue("/usr/bin/bash"),
+			"CommandLine":        enrichment.NewStringValue("bash"),
+			"ParentImage":        enrichment.NewStringValue("/usr/lib/systemd/systemd"),
+			"ParentCommandLine":  enrichment.NewStringValue("/usr/lib/systemd/systemd"),
+		},
+	}
+
+	if !a.shouldExcludeEvent(evt) {
+		t.Fatal("shouldExcludeEvent() should match ParentImage")
+	}
+}
+
+func TestShouldExcludeEventCaseInsensitive(t *testing.T) {
+	a := New(Parameters{ProcessExclude: "BASH"})
+
+	evt := &stubEvent{
+		id:     provider.EventIdentifier{ProviderName: "LinuxEBPF", EventID: 1},
+		source: "LinuxEBPF:ProcessExec",
+		fields: enrichment.DataFieldsMap{
+			"Image": enrichment.NewStringValue("/usr/bin/bash"),
+		},
+	}
+
+	if !a.shouldExcludeEvent(evt) {
+		t.Fatal("shouldExcludeEvent() should be case insensitive")
+	}
+}
+
+func TestStartPprofEndpointWithEmptyAddress(t *testing.T) {
+	a := New(Parameters{PprofListen: ""})
+
+	err := a.startPprofEndpoint()
+	if err != nil {
+		t.Fatalf("startPprofEndpoint() with empty address should return nil, got: %v", err)
+	}
+	if a.pprofSrv != nil {
+		t.Fatal("pprofSrv should be nil when no address is configured")
+	}
+}
+
+func TestStartPprofEndpointWithWhitespaceAddress(t *testing.T) {
+	a := New(Parameters{PprofListen: "   "})
+
+	err := a.startPprofEndpoint()
+	if err != nil {
+		t.Fatalf("startPprofEndpoint() with whitespace address should return nil, got: %v", err)
+	}
+	if a.pprofSrv != nil {
+		t.Fatal("pprofSrv should be nil when no address is configured")
+	}
+}
+
+func TestStartPprofEndpointWithValidAddress(t *testing.T) {
+	a := New(Parameters{PprofListen: "127.0.0.1:0"}) // port 0 = auto-assign
+
+	err := a.startPprofEndpoint()
+	if err != nil {
+		t.Fatalf("startPprofEndpoint() error = %v", err)
+	}
+	if a.pprofSrv == nil {
+		t.Fatal("pprofSrv should not be nil")
+	}
+	if a.pprofAddr == "" {
+		t.Fatal("pprofAddr should not be empty")
+	}
+
+	// Clean up
+	a.stopPprofEndpoint()
+	if a.pprofSrv != nil {
+		t.Fatal("pprofSrv should be nil after stop")
+	}
+	if a.pprofAddr != "" {
+		t.Fatal("pprofAddr should be empty after stop")
+	}
+}
+
+func TestStartPprofEndpointWithInvalidAddress(t *testing.T) {
+	a := New(Parameters{PprofListen: "invalid:address:format:99999999"})
+
+	err := a.startPprofEndpoint()
+	if err == nil {
+		a.stopPprofEndpoint()
+		t.Fatal("startPprofEndpoint() expected error for invalid address")
+	}
+}
+
+func TestStopPprofEndpointIsIdempotent(t *testing.T) {
+	a := New(Parameters{})
+	a.pprofSrv = nil
+
+	// Should not panic when called on nil server
+	a.stopPprofEndpoint()
+
+	// Call again
+	a.stopPprofEndpoint()
+}
+
+func TestShutdownWithNilComponents(t *testing.T) {
+	a := &Agent{}
+
+	// Should not panic with all nil components
+	a.shutdown()
+}
+
+func TestCloseOutputsWithCloserErrors(t *testing.T) {
+	closeCount := 0
+	a := &Agent{
+		closers: []func() error{
+			func() error { closeCount++; return nil },
+			func() error { closeCount++; return nil },
+		},
+	}
+
+	a.closeOutputs()
+
+	if closeCount != 2 {
+		t.Fatalf("closeCount = %d, want 2", closeCount)
+	}
+	if a.closers != nil {
+		t.Fatal("closers should be nil after closeOutputs")
+	}
+}
+
+func TestPrintWelcomeBannerInJSONMode(t *testing.T) {
+	// In JSON mode, banner should be skipped
+	a := New(Parameters{JSONOutput: true})
+
+	// This should not panic and should do nothing
+	a.printWelcomeBanner()
+}
+
+func TestPrintWelcomeBannerInTextMode(t *testing.T) {
+	// Capture output
+	origOut := log.StandardLogger().Out
+	defer log.StandardLogger().SetOutput(origOut)
+
+	var buf strings.Builder
+	log.StandardLogger().SetOutput(&buf)
+
+	a := New(Parameters{JSONOutput: false, Version: "1.2.3"})
+	a.printWelcomeBanner()
+
+	output := buf.String()
+	// The ASCII art contains "AURORA" split across multiple lines with backslashes
+	// Check for parts of it or the descriptive text
+	if !strings.Contains(output, "Real-Time Sigma Matching") {
+		t.Fatalf("expected 'Real-Time Sigma Matching' in banner, got: %s", output)
+	}
+	if !strings.Contains(output, "v1.2.3") {
+		t.Fatalf("expected v1.2.3 in banner, got: %s", output)
+	}
+}
+
+func TestPrintWelcomeBannerVersionNormalization(t *testing.T) {
+	origOut := log.StandardLogger().Out
+	defer log.StandardLogger().SetOutput(origOut)
+
+	var buf strings.Builder
+	log.StandardLogger().SetOutput(&buf)
+
+	// Test without "v" prefix
+	a := New(Parameters{JSONOutput: false, Version: "2.0.0"})
+	a.printWelcomeBanner()
+
+	if !strings.Contains(buf.String(), "v2.0.0") {
+		t.Fatalf("expected v2.0.0 in banner (auto-prefixed), got: %s", buf.String())
+	}
+
+	buf.Reset()
+
+	// Test with "v" prefix already
+	a2 := New(Parameters{JSONOutput: false, Version: "v3.0.0"})
+	a2.printWelcomeBanner()
+
+	if !strings.Contains(buf.String(), "v3.0.0") {
+		t.Fatalf("expected v3.0.0 in banner, got: %s", buf.String())
+	}
+}
+
+func TestPrintWelcomeBannerDefaultVersion(t *testing.T) {
+	origOut := log.StandardLogger().Out
+	defer log.StandardLogger().SetOutput(origOut)
+
+	var buf strings.Builder
+	log.StandardLogger().SetOutput(&buf)
+
+	a := New(Parameters{JSONOutput: false, Version: ""})
+	a.printWelcomeBanner()
+
+	// Default version should be 0.1.4
+	if !strings.Contains(buf.String(), "v0.1.4") {
+		t.Fatalf("expected default version in banner, got: %s", buf.String())
+	}
+}

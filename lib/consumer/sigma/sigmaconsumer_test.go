@@ -390,6 +390,253 @@ func TestSigmaRuleLevelToLogLevel(t *testing.T) {
 	}
 }
 
+func TestIsValidMinLevel(t *testing.T) {
+	tests := []struct {
+		level string
+		want  bool
+	}{
+		{level: "info", want: true},
+		{level: "INFO", want: true},
+		{level: "  info  ", want: true},
+		{level: "informational", want: true},
+		{level: "low", want: true},
+		{level: "medium", want: true},
+		{level: "high", want: true},
+		{level: "critical", want: true},
+		{level: "CRITICAL", want: true},
+		{level: "invalid", want: false},
+		{level: "", want: false},
+		{level: "debug", want: false},
+		{level: "warning", want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.level, func(t *testing.T) {
+			got := IsValidMinLevel(tc.level)
+			if got != tc.want {
+				t.Fatalf("IsValidMinLevel(%q) = %v, want %v", tc.level, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSigmaConsumerName(t *testing.T) {
+	consumer := New(Config{})
+	got := consumer.Name()
+	if got != "SigmaConsumer" {
+		t.Fatalf("Name() = %q, want SigmaConsumer", got)
+	}
+}
+
+func TestSigmaConsumerInitialize(t *testing.T) {
+	consumer := New(Config{})
+	err := consumer.Initialize()
+	if err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+}
+
+func TestSigmaConsumerClose(t *testing.T) {
+	consumer := New(Config{})
+	err := consumer.Close()
+	if err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestSigmaConsumerMatches(t *testing.T) {
+	consumer := New(Config{})
+
+	// Initially should be 0
+	if got := consumer.Matches(); got != 0 {
+		t.Fatalf("Matches() = %d, want 0", got)
+	}
+
+	// After adding via atomic
+	consumer.matches.Add(5)
+	if got := consumer.Matches(); got != 5 {
+		t.Fatalf("Matches() = %d, want 5", got)
+	}
+
+	consumer.matches.Add(3)
+	if got := consumer.Matches(); got != 8 {
+		t.Fatalf("Matches() = %d, want 8", got)
+	}
+}
+
+func TestSigmaEventWrapperKeywords(t *testing.T) {
+	event := &testEvent{
+		fields: enrichment.DataFieldsMap{
+			"Image":       enrichment.NewStringValue("/bin/bash"),
+			"CommandLine": enrichment.NewStringValue("bash -c echo"),
+		},
+	}
+	wrapper := &sigmaEventWrapper{event: event}
+
+	keywords, ok := wrapper.Keywords()
+	if !ok {
+		t.Fatal("Keywords() returned false")
+	}
+	if len(keywords) != 2 {
+		t.Fatalf("Keywords() len = %d, want 2", len(keywords))
+	}
+
+	// Check that both field values are included
+	keywordSet := make(map[string]bool)
+	for _, kw := range keywords {
+		keywordSet[kw] = true
+	}
+	if !keywordSet["/bin/bash"] || !keywordSet["bash -c echo"] {
+		t.Fatalf("Keywords() = %v, expected [/bin/bash, bash -c echo]", keywords)
+	}
+}
+
+func TestSigmaEventWrapperKeywordsEmpty(t *testing.T) {
+	event := &testEvent{fields: enrichment.DataFieldsMap{}}
+	wrapper := &sigmaEventWrapper{event: event}
+
+	keywords, ok := wrapper.Keywords()
+	if ok {
+		t.Fatal("Keywords() should return false for empty fields")
+	}
+	if keywords != nil {
+		t.Fatalf("Keywords() = %v, want nil", keywords)
+	}
+}
+
+func TestSigmaEventWrapperForReplayKeywords(t *testing.T) {
+	wrapper := &sigmaEventWrapperForReplay{
+		fields: map[string]string{
+			"Image":       "/bin/bash",
+			"CommandLine": "bash -c echo",
+		},
+	}
+
+	keywords, ok := wrapper.Keywords()
+	if !ok {
+		t.Fatal("Keywords() returned false")
+	}
+	if len(keywords) != 2 {
+		t.Fatalf("Keywords() len = %d, want 2", len(keywords))
+	}
+}
+
+func TestSigmaEventWrapperForReplayKeywordsEmpty(t *testing.T) {
+	wrapper := &sigmaEventWrapperForReplay{fields: map[string]string{}}
+
+	keywords, ok := wrapper.Keywords()
+	if ok {
+		t.Fatal("Keywords() should return false for empty fields")
+	}
+	if keywords != nil {
+		t.Fatalf("Keywords() = %v, want nil", keywords)
+	}
+}
+
+func TestSigmaEventWrapperForReplaySelect(t *testing.T) {
+	wrapper := &sigmaEventWrapperForReplay{
+		fields: map[string]string{
+			"Image": "/bin/bash",
+		},
+	}
+
+	// Existing key
+	val, ok := wrapper.Select("Image")
+	if !ok || val != "/bin/bash" {
+		t.Fatalf("Select(Image) = (%v, %v), want (/bin/bash, true)", val, ok)
+	}
+
+	// Missing key
+	val, ok = wrapper.Select("NonExistent")
+	if ok {
+		t.Fatalf("Select(NonExistent) = (%v, %v), want (_, false)", val, ok)
+	}
+}
+
+func TestFormatMatchMessage(t *testing.T) {
+	event := &testEvent{
+		fields: enrichment.DataFieldsMap{
+			"Image":       enrichment.NewStringValue("/usr/bin/whoami"),
+			"CommandLine": enrichment.NewStringValue("whoami /all"),
+			"ProcessId":   enrichment.NewStringValue("1234"),
+		},
+	}
+	result := sigmaengine.Result{
+		ID:    "test-rule-id",
+		Title: "Test Rule",
+	}
+
+	got := FormatMatchMessage(event, result, "medium")
+	if !strings.Contains(got, "[medium]") {
+		t.Fatalf("FormatMatchMessage() missing level, got %q", got)
+	}
+	if !strings.Contains(got, "test-rule-id") {
+		t.Fatalf("FormatMatchMessage() missing rule ID, got %q", got)
+	}
+	if !strings.Contains(got, "PID=1234") {
+		t.Fatalf("FormatMatchMessage() missing PID, got %q", got)
+	}
+	if !strings.Contains(got, "Image=/usr/bin/whoami") {
+		t.Fatalf("FormatMatchMessage() missing Image, got %q", got)
+	}
+	if !strings.Contains(got, "CommandLine=whoami /all") {
+		t.Fatalf("FormatMatchMessage() missing CommandLine, got %q", got)
+	}
+}
+
+func TestFormatMatchMessageEmptyFields(t *testing.T) {
+	event := &testEvent{fields: enrichment.DataFieldsMap{}}
+	result := sigmaengine.Result{ID: "rule-123"}
+
+	got := FormatMatchMessage(event, result, "high")
+	if !strings.Contains(got, "[high]") {
+		t.Fatalf("FormatMatchMessage() missing level, got %q", got)
+	}
+	if !strings.Contains(got, "rule-123") {
+		t.Fatalf("FormatMatchMessage() missing rule ID, got %q", got)
+	}
+}
+
+func TestHandleEventNoRuleset(t *testing.T) {
+	consumer := New(Config{})
+	// Don't call InitializeWithRules, so ruleset is nil
+
+	event := &testEvent{
+		fields: enrichment.DataFieldsMap{
+			"Image": enrichment.NewStringValue("/bin/bash"),
+		},
+	}
+
+	err := consumer.HandleEvent(event)
+	if err != nil {
+		t.Fatalf("HandleEvent() error = %v", err)
+	}
+	// Should return early without error when ruleset is nil
+}
+
+func TestEvalFieldsMapNoRuleset(t *testing.T) {
+	consumer := New(Config{})
+	// Don't call InitializeWithRules
+
+	results := consumer.EvalFieldsMap(map[string]string{
+		"Image": "/bin/bash",
+	})
+
+	if results != nil {
+		t.Fatalf("EvalFieldsMap() = %v, want nil when ruleset is nil", results)
+	}
+}
+
+func TestLookupRuleLevelNilMap(t *testing.T) {
+	consumer := New(Config{})
+	consumer.ruleLevels = nil
+
+	got := consumer.lookupRuleLevel("any-id")
+	if got != "" {
+		t.Fatalf("lookupRuleLevel() = %q, want empty string for nil map", got)
+	}
+}
+
 func BenchmarkLookupRuleLevel(b *testing.B) {
 	consumer := New(Config{})
 	for i := 0; i < 2000; i++ {

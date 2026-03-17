@@ -1,9 +1,12 @@
 package main
 
 import (
+	"archive/tar"
 	"archive/zip"
+	"compress/gzip"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1022,5 +1025,397 @@ func writeTestZip(t *testing.T, archivePath string, files map[string]string) {
 	}
 	if err := zw.Close(); err != nil {
 		t.Fatalf("zip.Close() error = %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// extractSubdirFromArchive — dispatch tests
+// ---------------------------------------------------------------------------
+
+func TestExtractSubdirFromArchiveUnsupportedFormat(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	archivePath := filepath.Join(tmpDir, "unknown.bin")
+	os.WriteFile(archivePath, []byte("random content"), 0644)
+
+	_, err := extractSubdirFromArchive(archivePath, "rules/linux", filepath.Join(tmpDir, "out"))
+	if err == nil {
+		t.Fatal("expected error for unsupported format")
+	}
+}
+
+func TestExtractSubdirFromArchiveMissingFile(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	_, err := extractSubdirFromArchive(filepath.Join(tmpDir, "missing.tar.gz"), "rules/linux", filepath.Join(tmpDir, "out"))
+	if err == nil {
+		t.Fatal("expected error for missing file")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// extractSubdirFromTarGz — comprehensive tests
+// ---------------------------------------------------------------------------
+
+func TestExtractSubdirFromTarGz(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	archivePath := filepath.Join(tmpDir, "test.tar.gz")
+	destDir := filepath.Join(tmpDir, "out")
+
+	writeTestTarGzHelper(t, archivePath, map[string]string{
+		"repo/rules/linux/proc/test1.yml": "rule1",
+		"repo/rules/linux/file/test2.yml": "rule2",
+		"repo/rules/windows/test3.yml":    "rule3",
+		"repo/README.md":                  "readme",
+	})
+
+	written, err := extractSubdirFromTarGz(archivePath, "rules/linux", destDir)
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if written != 2 {
+		t.Fatalf("written = %d, want 2", written)
+	}
+
+	content, err := os.ReadFile(filepath.Join(destDir, "proc", "test1.yml"))
+	if err != nil || string(content) != "rule1" {
+		t.Fatalf("rule1 content = %q, err = %v", content, err)
+	}
+}
+
+func TestExtractSubdirFromTarGzEmptyResult(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	archivePath := filepath.Join(tmpDir, "test.tar.gz")
+	destDir := filepath.Join(tmpDir, "out")
+
+	writeTestTarGzHelper(t, archivePath, map[string]string{
+		"repo/rules/windows/test.yml": "rule",
+	})
+
+	_, err := extractSubdirFromTarGz(archivePath, "rules/linux", destDir)
+	if err == nil || !strings.Contains(err.Error(), "no files found") {
+		t.Fatalf("expected 'no files found' error, got: %v", err)
+	}
+}
+
+func TestExtractSubdirFromTarGzDirectoryEntries(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	archivePath := filepath.Join(tmpDir, "test.tar.gz")
+	destDir := filepath.Join(tmpDir, "out")
+
+	writeTestTarGzWithDirs(t, archivePath, map[string]string{
+		"repo/rules/linux/proc/test1.yml": "rule1",
+	}, []string{
+		"repo/rules/linux/proc/",
+	})
+
+	written, err := extractSubdirFromTarGz(archivePath, "rules/linux", destDir)
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if written != 1 {
+		t.Fatalf("written = %d, want 1", written)
+	}
+
+	// Directory should exist
+	info, err := os.Stat(filepath.Join(destDir, "proc"))
+	if err != nil || !info.IsDir() {
+		t.Fatal("expected proc directory to exist")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// extractBestBinaryFromArchive — dispatch tests
+// ---------------------------------------------------------------------------
+
+func TestExtractBestBinaryFromArchiveUnsupported(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	archivePath := filepath.Join(tmpDir, "unknown.bin")
+	os.WriteFile(archivePath, []byte("random content"), 0644)
+
+	_, err := extractBestBinaryFromArchive(archivePath, filepath.Join(tmpDir, "out"), []string{"aurora"})
+	if err == nil {
+		t.Fatal("expected error for unsupported format")
+	}
+}
+
+func TestExtractBestBinaryFromTarGz(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	archivePath := filepath.Join(tmpDir, "release.tar.gz")
+	outputPath := filepath.Join(tmpDir, "aurora")
+
+	writeTestTarGzHelper(t, archivePath, map[string]string{
+		"release/aurora":       "binary-content",
+		"release/aurora-linux": "alt-binary-content",
+		"release/README.md":    "readme",
+	})
+
+	entryName, err := extractBestBinaryFromTarGz(archivePath, outputPath, []string{"aurora", "aurora-linux"})
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if !strings.Contains(entryName, "aurora") {
+		t.Fatalf("entryName = %q, expected aurora", entryName)
+	}
+
+	content, _ := os.ReadFile(outputPath)
+	if string(content) != "binary-content" {
+		t.Fatalf("content = %q, want binary-content", content)
+	}
+}
+
+func TestExtractBestBinaryFromTarGzNotFound(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	archivePath := filepath.Join(tmpDir, "release.tar.gz")
+	outputPath := filepath.Join(tmpDir, "aurora")
+
+	writeTestTarGzHelper(t, archivePath, map[string]string{
+		"release/README.md": "readme",
+	})
+
+	_, err := extractBestBinaryFromTarGz(archivePath, outputPath, []string{"aurora"})
+	if err == nil {
+		t.Fatal("expected error when binary not found")
+	}
+}
+
+func TestExtractBestBinaryFromZip(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	archivePath := filepath.Join(tmpDir, "release.zip")
+	outputPath := filepath.Join(tmpDir, "aurora")
+
+	writeTestZip(t, archivePath, map[string]string{
+		"release/aurora":       "binary-content",
+		"release/aurora-linux": "alt-binary-content",
+		"release/README.md":    "readme",
+	})
+
+	entryName, err := extractBestBinaryFromZip(archivePath, outputPath, []string{"aurora", "aurora-linux"})
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if !strings.Contains(entryName, "aurora") {
+		t.Fatalf("entryName = %q, expected aurora", entryName)
+	}
+
+	content, _ := os.ReadFile(outputPath)
+	if string(content) != "binary-content" {
+		t.Fatalf("content = %q, want binary-content", content)
+	}
+}
+
+func TestExtractBestBinaryFromZipNotFound(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	archivePath := filepath.Join(tmpDir, "release.zip")
+	outputPath := filepath.Join(tmpDir, "aurora")
+
+	writeTestZip(t, archivePath, map[string]string{
+		"release/README.md": "readme",
+	})
+
+	_, err := extractBestBinaryFromZip(archivePath, outputPath, []string{"aurora"})
+	if err == nil {
+		t.Fatal("expected error when binary not found")
+	}
+}
+
+func TestExtractBestBinaryFromZipFallbackToSecondPreferred(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	archivePath := filepath.Join(tmpDir, "release.zip")
+	outputPath := filepath.Join(tmpDir, "binary")
+
+	writeTestZip(t, archivePath, map[string]string{
+		"release/aurora-linux": "second-binary",
+	})
+
+	entryName, err := extractBestBinaryFromZip(archivePath, outputPath, []string{"aurora", "aurora-linux"})
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if !strings.Contains(entryName, "aurora-linux") {
+		t.Fatalf("entryName = %q, expected aurora-linux", entryName)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// writeReaderToFile
+// ---------------------------------------------------------------------------
+
+func TestWriteReaderToFileSuccess(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	outputPath := filepath.Join(tmpDir, "nested", "dir", "file.txt")
+
+	err := writeReaderToFile(outputPath, strings.NewReader("hello world"), 0o600)
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+
+	content, _ := os.ReadFile(outputPath)
+	if string(content) != "hello world" {
+		t.Fatalf("content = %q, want hello world", content)
+	}
+
+	info, _ := os.Stat(outputPath)
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode = %v, want 0600", info.Mode().Perm())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// copyFile additional tests
+// ---------------------------------------------------------------------------
+
+func TestCopyFileMissingSource(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	err := copyFile(filepath.Join(tmpDir, "missing.txt"), filepath.Join(tmpDir, "dst.txt"), 0644)
+	if err == nil {
+		t.Fatal("expected error for missing source")
+	}
+}
+
+func TestCopyFileCreatesParentDirs(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	srcPath := filepath.Join(tmpDir, "src.txt")
+	dstPath := filepath.Join(tmpDir, "deep", "nested", "dst.txt")
+
+	os.WriteFile(srcPath, []byte("content"), 0644)
+
+	if err := copyFile(srcPath, dstPath, 0644); err != nil {
+		t.Fatalf("error = %v", err)
+	}
+
+	content, _ := os.ReadFile(dstPath)
+	if string(content) != "content" {
+		t.Fatalf("content = %q", content)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// copyDir additional tests
+// ---------------------------------------------------------------------------
+
+func TestCopyDirMissingSource(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	err := copyDir(filepath.Join(tmpDir, "missing"), filepath.Join(tmpDir, "dst"))
+	if err == nil {
+		t.Fatal("expected error for missing source")
+	}
+}
+
+func TestCopyDirSymlinkError(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	srcDir := filepath.Join(tmpDir, "src")
+	os.MkdirAll(srcDir, 0755)
+
+	realFile := filepath.Join(srcDir, "real.txt")
+	os.WriteFile(realFile, []byte("content"), 0644)
+
+	symlink := filepath.Join(srcDir, "link.txt")
+	os.Symlink(realFile, symlink)
+
+	err := copyDir(srcDir, filepath.Join(tmpDir, "dst"))
+	if err == nil {
+		t.Fatal("expected error for symlink in source")
+	}
+	if !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("error should mention symlink: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// relFromArchiveSubdir
+// ---------------------------------------------------------------------------
+
+func TestRelFromArchiveSubdirBasic(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		entry   string
+		subdir  string
+		wantRel string
+		wantOK  bool
+	}{
+		{"repo/rules/linux/test.yml", "rules/linux", "test.yml", true},
+		{"repo/rules/linux/", "rules/linux", "", true},
+		{"repo/rules/windows/test.yml", "rules/linux", "", false},
+		{"a/b/c/d.txt", "b/c", "d.txt", true},
+		{"just.txt", "", "just.txt", true},
+		{"", "", "", false},
+	}
+
+	for _, tc := range tests {
+		name := fmt.Sprintf("%s_%s", tc.entry, tc.subdir)
+		t.Run(name, func(t *testing.T) {
+			rel, ok := relFromArchiveSubdir(tc.entry, tc.subdir)
+			if ok != tc.wantOK || rel != tc.wantRel {
+				t.Fatalf("relFromArchiveSubdir(%q, %q) = (%q, %v), want (%q, %v)",
+					tc.entry, tc.subdir, rel, ok, tc.wantRel, tc.wantOK)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// helpers for tar.gz tests
+// ---------------------------------------------------------------------------
+
+// writeTestTarGzHelper wraps writeTestTarGz (from main_test.go) for use in test helper
+func writeTestTarGzHelper(t *testing.T, archivePath string, files map[string]string) {
+	t.Helper()
+	if err := writeTestTarGz(archivePath, files); err != nil {
+		t.Fatalf("writeTestTarGz() error = %v", err)
+	}
+}
+
+func writeTestTarGzWithDirs(t *testing.T, archivePath string, files map[string]string, dirs []string) {
+	t.Helper()
+	f, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	defer f.Close()
+
+	gw := gzip.NewWriter(f)
+	defer gw.Close()
+
+	tw := tar.NewWriter(gw)
+	defer tw.Close()
+
+	for _, dir := range dirs {
+		hdr := &tar.Header{
+			Name:     dir,
+			Mode:     0755,
+			Typeflag: tar.TypeDir,
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatalf("tar.WriteHeader() error = %v", err)
+		}
+	}
+
+	for name, content := range files {
+		hdr := &tar.Header{
+			Name: name,
+			Mode: 0644,
+			Size: int64(len(content)),
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatalf("tar.WriteHeader() error = %v", err)
+		}
+		if _, err := tw.Write([]byte(content)); err != nil {
+			t.Fatalf("tar.Write() error = %v", err)
+		}
 	}
 }

@@ -63,3 +63,56 @@ func TestCorrelatorEviction(t *testing.T) {
 		t.Error("PID 3 should be present")
 	}
 }
+
+func TestCorrelatorWithZeroSize(t *testing.T) {
+	_, err := NewCorrelator(0)
+	if err == nil {
+		t.Fatal("NewCorrelator(0) expected error")
+	}
+}
+
+func TestCorrelatorWithNegativeSize(t *testing.T) {
+	_, err := NewCorrelator(-1)
+	if err == nil {
+		t.Fatal("NewCorrelator(-1) expected error")
+	}
+}
+
+func TestCorrelatorLen(t *testing.T) {
+	c, err := NewCorrelator(100)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if c.Len() != 0 {
+		t.Errorf("Len() = %d, want 0 for empty cache", c.Len())
+	}
+
+	c.Store(1, &ProcessInfo{PID: 1, Image: "a"})
+	c.Store(2, &ProcessInfo{PID: 2, Image: "b"})
+
+	if c.Len() != 2 {
+		t.Errorf("Len() = %d, want 2", c.Len())
+	}
+}
+
+func TestCorrelatorUpdate(t *testing.T) {
+	c, err := NewCorrelator(100)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Store initial value
+	c.Store(1234, &ProcessInfo{PID: 1234, Image: "/usr/bin/bash"})
+
+	// Update with new value
+	c.Store(1234, &ProcessInfo{PID: 1234, Image: "/usr/bin/zsh"})
+
+	got := c.Lookup(1234)
+	if got == nil {
+		t.Fatal("Lookup returned nil")
+	}
+	if got.Image != "/usr/bin/zsh" {
+		t.Errorf("Image = %q, want /usr/bin/zsh (updated)", got.Image)
+	}
+}

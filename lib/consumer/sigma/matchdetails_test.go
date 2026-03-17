@@ -481,3 +481,207 @@ func TestStringifyRuleMetadataValue(t *testing.T) {
 		})
 	}
 }
+
+func TestDescribeStringMatcherPatterns(t *testing.T) {
+	// Test ContentPattern (TextPatternNone = exact match)
+	contentMatcher, _ := sigmaengine.NewStringMatcher(sigmaengine.TextPatternNone, false, false, false, "/usr/bin/bash")
+	got := describeStringMatcherPatterns(contentMatcher, "/usr/bin/bash")
+	if len(got) != 1 || got[0] != "/usr/bin/bash" {
+		t.Fatalf("ContentPattern match: got %v, want [/usr/bin/bash]", got)
+	}
+
+	// Test ContentPattern non-match
+	got = describeStringMatcherPatterns(contentMatcher, "/usr/bin/zsh")
+	if len(got) != 0 {
+		t.Fatalf("ContentPattern non-match: got %v, want []", got)
+	}
+
+	// Test PrefixPattern
+	prefixMatcher, _ := sigmaengine.NewStringMatcher(sigmaengine.TextPatternPrefix, false, false, false, "/usr/")
+	got = describeStringMatcherPatterns(prefixMatcher, "/usr/bin/bash")
+	if len(got) != 1 || got[0] != "/usr/*" {
+		t.Fatalf("PrefixPattern: got %v, want [/usr/*]", got)
+	}
+
+	// Test PrefixPattern non-match
+	got = describeStringMatcherPatterns(prefixMatcher, "/bin/bash")
+	if len(got) != 0 {
+		t.Fatalf("PrefixPattern non-match: got %v, want []", got)
+	}
+
+	// Test SuffixPattern
+	suffixMatcher, _ := sigmaengine.NewStringMatcher(sigmaengine.TextPatternSuffix, false, false, false, "/bash")
+	got = describeStringMatcherPatterns(suffixMatcher, "/usr/bin/bash")
+	if len(got) != 1 || got[0] != "*/bash" {
+		t.Fatalf("SuffixPattern: got %v, want [*/bash]", got)
+	}
+
+	// Test SuffixPattern non-match
+	got = describeStringMatcherPatterns(suffixMatcher, "/usr/bin/zsh")
+	if len(got) != 0 {
+		t.Fatalf("SuffixPattern non-match: got %v, want []", got)
+	}
+
+	// Test RegexPattern
+	regexMatcher, _ := sigmaengine.NewStringMatcher(sigmaengine.TextPatternRegex, false, false, false, ".*bash$")
+	got = describeStringMatcherPatterns(regexMatcher, "/usr/bin/bash")
+	if len(got) != 1 || got[0] != "/.*bash$/" {
+		t.Fatalf("RegexPattern: got %v, want [/.*bash$/]", got)
+	}
+
+	// Test RegexPattern non-match
+	got = describeStringMatcherPatterns(regexMatcher, "/usr/bin/zsh")
+	if len(got) != 0 {
+		t.Fatalf("RegexPattern non-match: got %v, want []", got)
+	}
+
+	// Test StringMatchers (multiple patterns OR'd together) with exact match patterns
+	matcher1, _ := sigmaengine.NewStringMatcher(sigmaengine.TextPatternNone, false, false, false, "test1")
+	matcher2, _ := sigmaengine.NewStringMatcher(sigmaengine.TextPatternNone, false, false, false, "test2")
+	combined := sigmaengine.StringMatchers{matcher1, matcher2}
+	// Only one should match for exact patterns
+	got = describeStringMatcherPatterns(combined, "test1")
+	if len(got) != 1 || got[0] != "test1" {
+		t.Fatalf("StringMatchers: got %v, want [test1]", got)
+	}
+
+	// Test StringMatchersConj (multiple patterns AND'd together) with prefix patterns
+	prefix1, _ := sigmaengine.NewStringMatcher(sigmaengine.TextPatternPrefix, false, false, false, "/usr/")
+	prefix2, _ := sigmaengine.NewStringMatcher(sigmaengine.TextPatternSuffix, false, false, false, "/bash")
+	conjMatcher := sigmaengine.StringMatchersConj{prefix1, prefix2}
+	got = describeStringMatcherPatterns(conjMatcher, "/usr/bin/bash")
+	if len(got) != 2 {
+		t.Fatalf("StringMatchersConj: got %v, want 2 patterns", got)
+	}
+
+	// Test GlobPattern via NewStringMatcher (contains modifier creates glob)
+	globMatcher, _ := sigmaengine.NewStringMatcher(sigmaengine.TextPatternContains, false, false, false, "evil")
+	got = describeStringMatcherPatterns(globMatcher, "path/to/evil/binary")
+	// GlobPattern returns "<glob>" as the description
+	if len(got) != 1 || got[0] != "<glob>" {
+		t.Fatalf("GlobPattern: got %v, want [<glob>]", got)
+	}
+
+	// Test GlobPattern non-match
+	got = describeStringMatcherPatterns(globMatcher, "path/to/good/binary")
+	if len(got) != 0 {
+		t.Fatalf("GlobPattern non-match: got %v, want []", got)
+	}
+}
+
+func TestDescribeNumMatcherPatterns(t *testing.T) {
+	// Test NumPattern match
+	numMatcher := sigmaengine.NumPattern{Val: 42}
+	got := describeNumMatcherPatterns(numMatcher, 42)
+	if len(got) != 1 || got[0] != "42" {
+		t.Fatalf("NumPattern match: got %v, want [42]", got)
+	}
+
+	// Test NumPattern non-match
+	got = describeNumMatcherPatterns(numMatcher, 99)
+	if len(got) != 0 {
+		t.Fatalf("NumPattern non-match: got %v, want []", got)
+	}
+
+	// Test NumMatchers (multiple patterns OR'd)
+	numMatcher1 := sigmaengine.NumPattern{Val: 10}
+	numMatcher2 := sigmaengine.NumPattern{Val: 20}
+	combined := sigmaengine.NumMatchers{numMatcher1, numMatcher2}
+	got = describeNumMatcherPatterns(combined, 10)
+	if len(got) != 1 || got[0] != "10" {
+		t.Fatalf("NumMatchers match: got %v, want [10]", got)
+	}
+
+	// Test NumMatchers with both matching
+	got = describeNumMatcherPatterns(combined, 20)
+	if len(got) != 1 || got[0] != "20" {
+		t.Fatalf("NumMatchers match second: got %v, want [20]", got)
+	}
+}
+
+func TestBuildRuleMetadataNilTree(t *testing.T) {
+	meta := buildRuleMetadata(nil)
+	if meta.ID != "" || meta.Title != "" {
+		t.Fatalf("expected empty metadata for nil tree, got ID=%q Title=%q", meta.ID, meta.Title)
+	}
+
+	meta = buildRuleMetadata(&sigmaengine.Tree{Rule: nil})
+	if meta.ID != "" || meta.Title != "" {
+		t.Fatalf("expected empty metadata for nil rule, got ID=%q Title=%q", meta.ID, meta.Title)
+	}
+}
+
+func TestRuleFieldPatternMatchesWithNilMatcher(t *testing.T) {
+	p := ruleFieldPattern{
+		Modifiers: []string{"contains"},
+		Pattern:   "test",
+		Matcher:   nil,
+	}
+
+	if p.matches("any value") {
+		t.Fatal("matches() should return false for nil Matcher")
+	}
+}
+
+func TestCollectFieldPatternEntryWithNumericTypes(t *testing.T) {
+	dst := make(map[string][]ruleFieldPattern)
+
+	// Test int
+	collectFieldPatternEntry(dst, "EventID", 4688, false)
+	if len(dst["eventid"]) != 1 || dst["eventid"][0].Pattern != "4688" {
+		t.Fatalf("int pattern: got %v", dst["eventid"])
+	}
+
+	// Test float32
+	dst = make(map[string][]ruleFieldPattern)
+	collectFieldPatternEntry(dst, "Score", float32(3.14), false)
+	if len(dst["score"]) != 1 {
+		t.Fatalf("float32 pattern: got %v", dst["score"])
+	}
+
+	// Test bool
+	dst = make(map[string][]ruleFieldPattern)
+	collectFieldPatternEntry(dst, "Enabled", true, false)
+	if len(dst["enabled"]) != 1 || dst["enabled"][0].Pattern != "true" {
+		t.Fatalf("bool pattern: got %v", dst["enabled"])
+	}
+}
+
+func TestCollectFieldPatternsFromSelectionValueMapInterfaceInterface(t *testing.T) {
+	dst := make(map[string][]ruleFieldPattern)
+
+	// Use map[interface{}]interface{} as YAML parsing sometimes produces this
+	value := map[interface{}]interface{}{
+		"Image|endswith": "/bash",
+	}
+
+	collectFieldPatternsFromSelectionValue(dst, value, false)
+
+	if len(dst["image"]) != 1 || dst["image"][0].Pattern != "/bash" {
+		t.Fatalf("map[interface{}]interface{}: got %v", dst["image"])
+	}
+}
+
+func TestExtractDetectionFieldPatternsWithNestedMaps(t *testing.T) {
+	detection := sigmaengine.Detection{
+		"selection": []interface{}{
+			map[interface{}]interface{}{
+				"Image|endswith": "/curl",
+			},
+			map[interface{}]interface{}{
+				"Image|endswith": "/wget",
+			},
+		},
+		"condition": "selection",
+	}
+
+	result := extractDetectionFieldPatterns(detection, false)
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+
+	patterns := result["image"]
+	if len(patterns) != 2 {
+		t.Fatalf("expected 2 patterns, got %d", len(patterns))
+	}
+}
