@@ -1,0 +1,112 @@
+# golangci-lint configuration for Aurora Linux
+# https://golangci-lint.run/usage/configuration/
+
+run:
+  # Timeout for analysis
+  timeout: 5m
+  # Include test files
+  tests: true
+
+linters:
+  # Disable all linters by default and enable explicitly
+  disable-all: true
+  enable:
+    # Default/core linters
+    - errcheck      # Check for unchecked errors
+    - govet         # Go vet examines Go source code
+    - staticcheck   # Static analysis checks
+    - gosimple      # Simplify code
+    - unused        # Find unused code
+    - ineffassign   # Detect ineffectual assignments
+
+    # Additional quality linters
+    - misspell      # Find misspelled words
+    - gofumpt       # Stricter gofmt
+    - revive        # Fast, configurable linter
+    - gocritic      # Highly extensible Go linter
+    - gocyclo       # Cyclomatic complexity checker
+
+linters-settings:
+  gocyclo:
+    # Aurora has some inherently complex functions (eBPF event handling,
+    # config parsing, validation logic) that are best kept as single functions
+    min-complexity: 50
+
+  gofumpt:
+    # Only check new code, don't enforce reformatting existing code yet
+    extra-rules: false
+
+  errcheck:
+    # Exclude common patterns where errors are intentionally ignored
+    exclude-functions:
+      # Close errors are almost never actionable
+      - (io.Closer).Close
+      - (*os.File).Close
+      - (*compress/gzip.Reader).Close
+      - (*archive/zip.ReadCloser).Close
+      # Cleanup in defer is best-effort
+      - os.RemoveAll
+      # SetDeadline errors are usually fine to ignore in tests
+      - (net.PacketConn).SetReadDeadline
+      - (net.Conn).SetReadDeadline
+      # Print functions rarely fail meaningfully
+      - fmt.Fprintln
+      - fmt.Fprintf
+      # Syscall close in cleanup
+      - syscall.Close
+
+  gocritic:
+    # Enable only diagnostic checks for now; style/perf can be added later
+    enabled-tags:
+      - diagnostic
+    disabled-checks:
+      # These are too noisy for initial adoption
+      - appendAssign
+      - commentFormatting
+
+  revive:
+    # Start with a minimal set of rules
+    rules:
+      - name: blank-imports
+      - name: context-as-argument
+      - name: context-keys-type
+      - name: error-return
+      - name: error-strings
+      - name: error-naming
+      - name: increment-decrement
+      - name: var-naming
+      - name: range
+      - name: receiver-naming
+      - name: time-naming
+      - name: indent-error-flow
+      - name: errorf
+
+issues:
+  # Exclusion rules
+  exclude-rules:
+    # Exclude errcheck in test files - tests often ignore errors intentionally
+    - path: _test\.go
+      linters:
+        - errcheck
+    # Exclude generated eBPF files from most checks
+    - path: "lib/provider/ebpf/.*_bpfel\\.go$"
+      linters:
+        - unused
+        - govet
+    # Existing code has different formatting - exclude gofumpt for now
+    # TODO: Run gofumpt on entire codebase in a separate PR
+    - path: \.go$
+      linters:
+        - gofumpt
+    # Exclude gocritic style suggestions that would require larger refactors
+    - linters:
+        - gocritic
+      text: "(paramTypeCombine|unnamedResult|httpNoBody|octalLiteral|unnecessaryDefer|filepathJoin|stringConcatSimplify)"
+    # Revive warnings for existing code patterns
+    - linters:
+        - revive
+      text: "(stutters|exported:|should have comment|var-naming|increment-decrement)"
+
+  # Don't limit the number of issues per linter
+  max-issues-per-linter: 0
+  max-same-issues: 0
