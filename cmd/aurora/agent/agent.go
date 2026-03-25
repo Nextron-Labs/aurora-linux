@@ -147,6 +147,7 @@ func (a *Agent) Run() error {
 	_ = a.listener.AddSource(ebpfprovider.SourceProcessExec)
 	_ = a.listener.AddSource(ebpfprovider.SourceFileCreate)
 	_ = a.listener.AddSource(ebpfprovider.SourceNetConnect)
+	_ = a.listener.AddSource(ebpfprovider.SourceBpfEvent)
 
 	if err := a.listener.Initialize(); err != nil {
 		return fmt.Errorf("initializing eBPF listener: %w", err)

@@ -228,6 +228,8 @@ func defaultSourceForEvent(providerName string, eventID uint16) string {
 		return "LinuxEBPF:NetConnect"
 	case 11:
 		return "LinuxEBPF:FileCreate"
+	case 100:
+		return "LinuxEBPF:BpfEvent"
 	default:
 		return ""
 	}

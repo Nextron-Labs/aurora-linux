@@ -8,8 +8,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	sigma "github.com/markuskont/go-sigma-rule-engine"
 	"github.com/Nextron-Labs/aurora-linux/lib/provider"
+	sigma "github.com/markuskont/go-sigma-rule-engine"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/time/rate"
 )
@@ -106,6 +106,7 @@ func (s *SigmaConsumer) InitializeWithRules(ruleDirs []string) error {
 		NoCollapseWS:    s.noCollapse,
 	})
 	if err != nil {
+		log.WithError(err).Error("SigmaConsumer: failed to create sigma ruleset")
 		return fmt.Errorf("creating sigma ruleset: %w", err)
 	}
 
@@ -303,6 +304,10 @@ type sigmaEventWrapper struct {
 
 // Select implements sigma.Selector — performs key-value lookup for structured data.
 func (w *sigmaEventWrapper) Select(key string) (interface{}, bool) {
+	// EventID lives on the event identifier, not in the data fields.
+	if key == "EventID" {
+		return int(w.event.ID().EventID), true
+	}
 	v := w.event.Value(key)
 	if !v.Valid {
 		return nil, false

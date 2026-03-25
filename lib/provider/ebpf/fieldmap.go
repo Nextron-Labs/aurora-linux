@@ -110,6 +110,124 @@ func buildNetFieldsMap(
 	return fields
 }
 
+// BPF command names aligned with Sysmon output.
+var bpfCmdNames = map[uint32]string{
+	0:  "BPF_MAP_CREATE",
+	1:  "BPF_MAP_LOOKUP_ELEM",
+	2:  "BPF_MAP_UPDATE_ELEM",
+	3:  "BPF_MAP_DELETE_ELEM",
+	4:  "BPF_MAP_GET_NEXT_KEY",
+	5:  "BPF_PROG_LOAD",
+	6:  "BPF_OBJ_PIN",
+	7:  "BPF_OBJ_GET",
+	8:  "BPF_PROG_ATTACH",
+	9:  "BPF_PROG_DETACH",
+	10: "BPF_PROG_TEST_RUN",
+	11: "BPF_PROG_GET_NEXT_ID",
+	12: "BPF_MAP_GET_NEXT_ID",
+	13: "BPF_PROG_GET_FD_BY_ID",
+	14: "BPF_MAP_GET_FD_BY_ID",
+	15: "BPF_OBJ_GET_INFO_BY_FD",
+	16: "BPF_PROG_QUERY",
+	17: "BPF_RAW_TRACEPOINT_OPEN",
+	18: "BPF_BTF_LOAD",
+	19: "BPF_BTF_GET_FD_BY_ID",
+	20: "BPF_TASK_FD_QUERY",
+	21: "BPF_MAP_LOOKUP_AND_DELETE_ELEM",
+	22: "BPF_MAP_FREEZE",
+	23: "BPF_BTF_GET_NEXT_ID",
+	24: "BPF_MAP_LOOKUP_BATCH",
+	25: "BPF_MAP_LOOKUP_AND_DELETE_BATCH",
+	26: "BPF_MAP_UPDATE_BATCH",
+	27: "BPF_MAP_DELETE_BATCH",
+	28: "BPF_LINK_CREATE",
+	29: "BPF_LINK_UPDATE",
+	30: "BPF_LINK_GET_FD_BY_ID",
+	31: "BPF_LINK_GET_NEXT_ID",
+	32: "BPF_ENABLE_STATS",
+	33: "BPF_ITER_CREATE",
+	34: "BPF_LINK_DETACH",
+	35: "BPF_PROG_BIND_MAP",
+}
+
+// BPF program type names aligned with Sysmon output.
+var bpfProgTypeNames = map[uint32]string{
+	0:  "UNSPEC",
+	1:  "SOCKET_FILTER",
+	2:  "KPROBE",
+	3:  "SCHED_CLS",
+	4:  "SCHED_ACT",
+	5:  "TRACEPOINT",
+	6:  "XDP",
+	7:  "PERF_EVENT",
+	8:  "CGROUP_SKB",
+	9:  "CGROUP_SOCK",
+	10: "LWT_IN",
+	11: "LWT_OUT",
+	12: "LWT_XMIT",
+	13: "SOCK_OPS",
+	14: "SK_SKB",
+	15: "CGROUP_DEVICE",
+	16: "SK_MSG",
+	17: "RAW_TRACEPOINT",
+	18: "CGROUP_SOCK_ADDR",
+	19: "LWT_SEG6LOCAL",
+	20: "LIRC_MODE2",
+	21: "SK_REUSEPORT",
+	22: "FLOW_DISSECTOR",
+	23: "CGROUP_SYSCTL",
+	24: "RAW_TRACEPOINT_WRITABLE",
+	25: "CGROUP_SOCKOPT",
+	26: "TRACING",
+	27: "STRUCT_OPS",
+	28: "EXT",
+	29: "LSM",
+	30: "SK_LOOKUP",
+	31: "SYSCALL",
+}
+
+func bpfCmdName(cmd uint32) string {
+	if name, ok := bpfCmdNames[cmd]; ok {
+		return name
+	}
+	return strconv.FormatUint(uint64(cmd), 10)
+}
+
+func bpfProgTypeName(pt uint32) string {
+	if name, ok := bpfProgTypeNames[pt]; ok {
+		return name
+	}
+	return strconv.FormatUint(uint64(pt), 10)
+}
+
+// buildBpfFieldsMap constructs the DataFieldsMap for a bpf_event.
+func buildBpfFieldsMap(
+	pid, uid uint32,
+	image string,
+	username string,
+	cmd uint32,
+	progType uint32,
+	retVal int64,
+	progName string,
+) enrichment.DataFieldsMap {
+	fields := make(enrichment.DataFieldsMap, 8)
+
+	fields.AddField("Image", image)
+	fields.AddField("User", username)
+	fields.AddField("ProcessId", strconv.FormatUint(uint64(pid), 10))
+	fields.AddField("BpfCommand", bpfCmdName(cmd))
+	fields.AddField("BpfProgramType", bpfProgTypeName(progType))
+	fields.AddField("BpfProgramId", strconv.FormatInt(retVal, 10))
+
+	if progName == "" {
+		fields.AddField("BpfProgramName", "-")
+	} else {
+		fields.AddField("BpfProgramName", progName)
+	}
+
+	return fields
+}
+
 // formatIPv4 formats a v4-mapped-v6 address (bytes 12-15) as dotted decimal.
 func formatIPv4(addr [16]byte) string {
 	return strconv.Itoa(int(addr[12])) + "." +

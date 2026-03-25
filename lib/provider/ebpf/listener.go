@@ -23,6 +23,7 @@ const (
 	SourceProcessExec = "LinuxEBPF:ProcessExec"
 	SourceFileCreate  = "LinuxEBPF:FileCreate"
 	SourceNetConnect  = "LinuxEBPF:NetConnect"
+	SourceBpfEvent    = "LinuxEBPF:BpfEvent"
 
 	readErrorBackoff = 100 * time.Millisecond
 )
@@ -33,20 +34,25 @@ type Listener struct {
 	enableExec bool
 	enableFile bool
 	enableNet  bool
+	enableBpf  bool
 
 	// eBPF objects and links
 	execObjs  *execMonitorObjects
 	fileObjs  *fileMonitorObjects
 	netObjs   *netMonitorObjects
+	bpfObjs   *bpfMonitorObjects
 	execLink  link.Link
 	fileEnter link.Link
 	fileExit  link.Link
 	netLink   link.Link
+	bpfEnter  link.Link
+	bpfExit   link.Link
 
 	// Ring buffer readers
 	execReader *ringbuf.Reader
 	fileReader *ringbuf.Reader
 	netReader  *ringbuf.Reader
+	bpfReader  *ringbuf.Reader
 
 	// Correlation and caches
 	correlator *enrichment.Correlator
@@ -62,6 +68,7 @@ type Listener struct {
 	initExecFn func() error
 	initFileFn func() error
 	initNetFn  func() error
+	initBpfFn  func() error
 }
 
 // NewListener creates a new eBPF listener with the given correlator.
@@ -83,6 +90,8 @@ func (l *Listener) AddSource(source string) error {
 		l.enableFile = true
 	case SourceNetConnect:
 		l.enableNet = true
+	case SourceBpfEvent:
+		l.enableBpf = true
 	default:
 		return fmt.Errorf("unknown source: %s", source)
 	}
@@ -142,6 +151,16 @@ func (l *Listener) Initialize() error {
 			initialized++
 		}
 	}
+	if l.enableBpf {
+		requested++
+		if err := l.initBpfSource(); err != nil {
+			l.enableBpf = false
+			initErrs = append(initErrs, fmt.Errorf("bpf monitor: %w", err))
+			log.WithError(err).Warn("Failed to initialize bpf monitor; source disabled")
+		} else {
+			initialized++
+		}
+	}
 
 	if requested > 0 && initialized == 0 {
 		return fmt.Errorf("failed to initialize any eBPF monitor: %w", errors.Join(initErrs...))
@@ -176,6 +195,13 @@ func (l *Listener) initNetSource() error {
 		return l.initNetFn()
 	}
 	return l.initNet()
+}
+
+func (l *Listener) initBpfSource() error {
+	if l.initBpfFn != nil {
+		return l.initBpfFn()
+	}
+	return l.initBpf()
 }
 
 // initExec loads the exec monitor BPF program and attaches to sched_process_exec.
@@ -280,6 +306,46 @@ func (l *Listener) initNet() error {
 	return nil
 }
 
+// initBpf loads the bpf monitor BPF program and attaches to bpf enter/exit.
+func (l *Listener) initBpf() error {
+	objs := &bpfMonitorObjects{}
+	if err := loadBpfMonitorObjects(objs, nil); err != nil {
+		return classifyBPFError(err, "bpf_monitor")
+	}
+	if err := l.registerSelfPID(objs.SelfPids, "bpf"); err != nil {
+		objs.Close()
+		return err
+	}
+
+	enter, err := link.Tracepoint("syscalls", "sys_enter_bpf", objs.TraceSysEnterBpf, nil)
+	if err != nil {
+		objs.Close()
+		return fmt.Errorf("attaching sys_enter_bpf: %w", err)
+	}
+
+	exit, err := link.Tracepoint("syscalls", "sys_exit_bpf", objs.TraceSysExitBpf, nil)
+	if err != nil {
+		enter.Close()
+		objs.Close()
+		return fmt.Errorf("attaching sys_exit_bpf: %w", err)
+	}
+
+	rd, err := ringbuf.NewReader(objs.BpfEvents)
+	if err != nil {
+		exit.Close()
+		enter.Close()
+		objs.Close()
+		return fmt.Errorf("creating bpf ring buffer reader: %w", err)
+	}
+
+	l.bpfObjs = objs
+	l.bpfEnter = enter
+	l.bpfExit = exit
+	l.bpfReader = rd
+
+	return nil
+}
+
 func (l *Listener) registerSelfPID(m *ebpf.Map, source string) error {
 	if m == nil {
 		return fmt.Errorf("registering self PID for %s monitor: self_pids map is nil", source)
@@ -307,6 +373,10 @@ func (l *Listener) SendEvents(callback func(event provider.Event)) {
 	if l.enableNet && l.netReader != nil {
 		l.wg.Add(1)
 		go l.readNetEvents(callback)
+	}
+	if l.enableBpf && l.bpfReader != nil {
+		l.wg.Add(1)
+		go l.readBpfEvents(callback)
 	}
 
 	l.wg.Wait()
@@ -399,6 +469,35 @@ func (l *Listener) readNetEvents(callback func(event provider.Event)) {
 	}
 }
 
+// readBpfEvents reads from the bpf ring buffer and processes events.
+func (l *Listener) readBpfEvents(callback func(event provider.Event)) {
+	defer l.wg.Done()
+
+	var record ringbuf.Record
+	for {
+		err := l.bpfReader.ReadInto(&record)
+		if err != nil {
+			if errors.Is(err, ringbuf.ErrClosed) {
+				return
+			}
+			log.WithError(err).Error("Reading bpf ring buffer")
+			if l.closed.Load() {
+				return
+			}
+			time.Sleep(readErrorBackoff)
+			continue
+		}
+
+		evt, err := l.parseBpfEvent(record.RawSample)
+		if err != nil {
+			log.WithError(err).Debug("Parsing bpf event")
+			continue
+		}
+
+		callback(evt)
+	}
+}
+
 // BPF binary structs for parsing ring buffer records.
 
 type bpfExecEvent struct {
@@ -433,6 +532,16 @@ type bpfNetEvent struct {
 	Family      uint8
 	Initiated   uint8
 	Pad         uint16
+}
+
+type bpfBpfEvent struct {
+	TimestampNs uint64
+	Pid         uint32
+	Uid         uint32
+	Cmd         uint32
+	ProgType    uint32
+	RetVal      int64
+	ProgName    [16]byte
 }
 
 // parseExecEvent parses a raw exec event from the ring buffer and reconstructs
@@ -607,6 +716,44 @@ func (l *Listener) parseNetEvent(data []byte) (*ebpfEvent, error) {
 	}, nil
 }
 
+// parseBpfEvent parses a raw bpf syscall event and reconstructs fields.
+func (l *Listener) parseBpfEvent(data []byte) (*ebpfEvent, error) {
+	var raw bpfBpfEvent
+	if err := binary.Read(bytes.NewReader(data), binary.LittleEndian, &raw); err != nil {
+		return nil, fmt.Errorf("decoding bpf event: %w", err)
+	}
+
+	pid := raw.Pid
+	uid := raw.Uid
+
+	// Resolve Image
+	image, _ := readExeLink(pid)
+	if image == "" && l.correlator != nil {
+		if info := l.correlator.Lookup(pid); info != nil {
+			image = info.Image
+		}
+	}
+
+	username := l.userCache.Lookup(uid)
+
+	fields := buildBpfFieldsMap(
+		pid, uid, image, username,
+		raw.Cmd, raw.ProgType, raw.RetVal,
+		nullTermStr(raw.ProgName[:], len(raw.ProgName)),
+	)
+
+	return &ebpfEvent{
+		id: provider.EventIdentifier{
+			ProviderName: ProviderName,
+			EventID:      EventIDBpfEvent,
+		},
+		pid:    pid,
+		source: SourceBpfEvent,
+		ts:     l.ktimeToWall(raw.TimestampNs),
+		fields: fields,
+	}, nil
+}
+
 // LostEvents returns the total number of lost events across all enabled sources.
 func (l *Listener) LostEvents() uint64 {
 	var total uint64
@@ -619,6 +766,9 @@ func (l *Listener) LostEvents() uint64 {
 	}
 	if l.netObjs != nil {
 		total += readLostCounter(l.netObjs.NetLostEvents)
+	}
+	if l.bpfObjs != nil {
+		total += readLostCounter(l.bpfObjs.BpfLostEvents)
 	}
 
 	return total
@@ -648,6 +798,11 @@ func (l *Listener) Close() error {
 			closeErrs = append(closeErrs, fmt.Errorf("closing net reader: %w", err))
 		}
 	}
+	if l.bpfReader != nil {
+		if err := l.bpfReader.Close(); err != nil {
+			closeErrs = append(closeErrs, fmt.Errorf("closing bpf reader: %w", err))
+		}
+	}
 
 	// Detach tracepoints
 	if l.execLink != nil {
@@ -670,6 +825,16 @@ func (l *Listener) Close() error {
 			closeErrs = append(closeErrs, fmt.Errorf("closing net link: %w", err))
 		}
 	}
+	if l.bpfEnter != nil {
+		if err := l.bpfEnter.Close(); err != nil {
+			closeErrs = append(closeErrs, fmt.Errorf("closing bpf enter link: %w", err))
+		}
+	}
+	if l.bpfExit != nil {
+		if err := l.bpfExit.Close(); err != nil {
+			closeErrs = append(closeErrs, fmt.Errorf("closing bpf exit link: %w", err))
+		}
+	}
 
 	// Close BPF objects
 	if l.execObjs != nil {
@@ -685,6 +850,11 @@ func (l *Listener) Close() error {
 	if l.netObjs != nil {
 		if err := l.netObjs.Close(); err != nil {
 			closeErrs = append(closeErrs, fmt.Errorf("closing net objects: %w", err))
+		}
+	}
+	if l.bpfObjs != nil {
+		if err := l.bpfObjs.Close(); err != nil {
+			closeErrs = append(closeErrs, fmt.Errorf("closing bpf objects: %w", err))
 		}
 	}
 

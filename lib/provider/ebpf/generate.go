@@ -11,3 +11,4 @@ package ebpf
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -target bpfel -cc clang execMonitor bpf/exec_monitor.c -- -I/usr/include -I./bpf/headers
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -target bpfel -cc clang fileMonitor bpf/file_monitor.c -- -I/usr/include -I./bpf/headers
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -target bpfel -cc clang netMonitor bpf/net_monitor.c -- -I/usr/include -I./bpf/headers
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -target bpfel -cc clang bpfMonitor bpf/bpf_monitor.c -- -I/usr/include -I./bpf/headers

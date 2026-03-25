@@ -14,6 +14,7 @@ const (
 	EventIDProcessCreation   uint16 = 1
 	EventIDNetworkConnection uint16 = 3
 	EventIDFileEvent         uint16 = 11
+	EventIDBpfEvent          uint16 = 100
 )
 
 // ebpfEvent is the concrete Event implementation for events from the eBPF provider.
