@@ -13,7 +13,7 @@ import (
 	"github.com/spf13/pflag"
 )
 
-var version = "0.1.4"
+var version = "0.2.0"
 
 func main() {
 	params := agent.DefaultParameters()
