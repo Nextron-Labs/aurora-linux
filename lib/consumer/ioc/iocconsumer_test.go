@@ -786,6 +786,170 @@ func TestFilenameIOCLevelField(t *testing.T) {
 	}
 }
 
+// TestLoadC2IOCsRejectsMalformedEntries verifies that common formatting
+// mistakes in C2 IOC files are rejected with warnings, not silently loaded.
+func TestLoadC2IOCsRejectsMalformedEntries(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "c2.txt")
+	content := strings.Join([]string{
+		"# Malformed entries that must be rejected",
+		"evildomain.com:65",        // colon instead of semicolon
+		"bad:domain.com",           // colon in FQDN
+		"192.168.1.1:8080",         // IP with port (colon)
+		"evil domain.com",          // space in domain
+		"not_a_domain",             // no dot, underscore
+		";95",                      // empty indicator with score
+		"evil.com;abc",             // non-numeric score — treated as full indicator, rejected by isLikelyDomain
+		"",                         // empty line (skipped)
+		"# Valid entries that must be accepted",
+		"legit.evil.com;75",        // valid domain with score
+		"clean-c2.example.org",     // valid domain without score
+		"10.20.30.40;60",           // valid IP with score
+		"172.16.0.1",               // valid IP without score
+	}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	domains, ips, err := loadC2IOCs(path, true)
+	if err != nil {
+		t.Fatalf("loadC2IOCs() error = %v", err)
+	}
+
+	// Exactly 2 valid domains should load
+	if len(domains) != 2 {
+		t.Fatalf("expected 2 valid domains, got %d: %v", len(domains), domains)
+	}
+	if _, ok := domains["legit.evil.com"]; !ok {
+		t.Error("missing legit.evil.com")
+	}
+	if _, ok := domains["clean-c2.example.org"]; !ok {
+		t.Error("missing clean-c2.example.org")
+	}
+
+	// Exactly 2 valid IPs should load
+	if len(ips) != 2 {
+		t.Fatalf("expected 2 valid IPs, got %d: %v", len(ips), ips)
+	}
+	if entry, ok := ips["10.20.30.40"]; !ok {
+		t.Error("missing 10.20.30.40")
+	} else if entry.score != 60 {
+		t.Errorf("10.20.30.40 score = %d, want 60", entry.score)
+	}
+	if entry, ok := ips["172.16.0.1"]; !ok {
+		t.Error("missing 172.16.0.1")
+	} else if entry.score != defaultC2Score {
+		t.Errorf("172.16.0.1 score = %d, want %d (default)", entry.score, defaultC2Score)
+	}
+
+	// Verify scores on domains
+	if entry := domains["legit.evil.com"]; entry.score != 75 {
+		t.Errorf("legit.evil.com score = %d, want 75", entry.score)
+	}
+	if entry := domains["clean-c2.example.org"]; entry.score != defaultC2Score {
+		t.Errorf("clean-c2.example.org score = %d, want %d (default)", entry.score, defaultC2Score)
+	}
+}
+
+// TestLoadFilenameIOCsThreeFieldFormat verifies the REGEX;SCORE;FP_REGEX format
+// including edge cases with false-positive exclusion patterns.
+func TestLoadFilenameIOCsThreeFieldFormat(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "filename-iocs.txt")
+	content := strings.Join([]string{
+		// Standard two-field
+		`\\evil\.exe;80`,
+		// Three-field with FP exclusion
+		`\\cmd\.exe;65;\\(System32|Winsxs)\\`,
+		// Three-field with empty FP field (should work, no FP filter)
+		`\\danger\.dll;90;`,
+		// Missing leading backslash (still valid regex, just broader match)
+		`master\.exe;70`,
+		// Properly escaped leading backslash
+		`\\\\master\.exe;70`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	entries, err := loadFilenameIOCs(path, true)
+	if err != nil {
+		t.Fatalf("loadFilenameIOCs() error = %v", err)
+	}
+
+	if len(entries) != 5 {
+		t.Fatalf("expected 5 entries, got %d", len(entries))
+	}
+
+	// Verify the three-field entry has a compiled FP exclusion
+	cmdEntry := entries[1] // \\cmd\.exe;65;\\(System32|Winsxs)\\
+	if cmdEntry.score != 65 {
+		t.Errorf("cmd.exe score = %d, want 65", cmdEntry.score)
+	}
+	if cmdEntry.falsePositive == nil {
+		t.Fatal("cmd.exe should have a false-positive exclusion pattern")
+	}
+	// FP pattern should match System32 paths
+	if !cmdEntry.falsePositive.MatchString(`C:\Windows\System32\cmd.exe`) {
+		t.Error("FP pattern should match System32 path")
+	}
+	// But not match other paths
+	if cmdEntry.falsePositive.MatchString(`C:\Temp\cmd.exe`) {
+		t.Error("FP pattern should NOT match Temp path")
+	}
+
+	// Empty FP field should result in nil falsePositive
+	dangerEntry := entries[2]
+	if dangerEntry.falsePositive != nil {
+		t.Error("empty FP field should result in nil falsePositive")
+	}
+	if dangerEntry.score != 90 {
+		t.Errorf("danger.dll score = %d, want 90", dangerEntry.score)
+	}
+}
+
+// TestLoadFilenameIOCsRejectsMalformedEntries tests that invalid filename IOC
+// lines are rejected — missing score, invalid regex, non-numeric score.
+func TestLoadFilenameIOCsRejectsMalformedEntries(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "filename-iocs.txt")
+	content := strings.Join([]string{
+		`no-score-field`,           // missing ;SCORE
+		`(invalid-regex;90`,        // unclosed paren
+		`;50`,                      // empty pattern
+		`valid-pattern;not-a-num`,  // non-numeric score
+		`good\.exe;abc;fp-pattern`, // non-numeric score with FP field
+		`ok\.dll;75;(unclosed`,     // valid pattern+score, invalid FP regex
+		`# comment`,
+		``,
+		`(?i)\\legit\.exe;80`,      // valid entry
+		`(?i)\\tool\.exe;60;(?i)\\Windows\\`, // valid three-field
+	}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	entries, err := loadFilenameIOCs(path, true)
+	if err != nil {
+		t.Fatalf("loadFilenameIOCs() error = %v", err)
+	}
+
+	// Only the 2 valid entries should load
+	if len(entries) != 2 {
+		for i, e := range entries {
+			t.Logf("  entry[%d]: pattern=%q score=%d", i, e.rawPattern, e.score)
+		}
+		t.Fatalf("expected 2 valid entries, got %d", len(entries))
+	}
+
+	if entries[0].rawPattern != `(?i)\\legit\.exe` || entries[0].score != 80 {
+		t.Errorf("entry[0] = %q;%d, want (?i)\\\\legit\\.exe;80", entries[0].rawPattern, entries[0].score)
+	}
+	if entries[1].rawPattern != `(?i)\\tool\.exe` || entries[1].score != 60 || entries[1].falsePositive == nil {
+		t.Errorf("entry[1] unexpected: pattern=%q score=%d hasFP=%v", entries[1].rawPattern, entries[1].score, entries[1].falsePositive != nil)
+	}
+}
+
 func testLogger() (*log.Logger, *bytes.Buffer) {
 	var out bytes.Buffer
 	logger := log.New()

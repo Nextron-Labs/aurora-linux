@@ -80,7 +80,13 @@ func loadC2IOCs(path string, required bool) (map[string]c2IOCEntry, map[string]c
 
 		host := normalizeDomain(indicator)
 		if !isLikelyDomain(host) {
-			warnSkipIOCLine(path, lineNo, "invalid domain or IP")
+			// Give a specific hint when ':' is present — likely a
+			// mistyped score separator (should be ';' not ':').
+			if strings.Contains(indicator, ":") {
+				warnSkipIOCLine(path, lineNo, "indicator contains ':' (not valid in FQDN — use ';' as score separator)")
+			} else {
+				warnSkipIOCLine(path, lineNo, "invalid domain or IP")
+			}
 			continue
 		}
 		domains[host] = c2IOCEntry{indicator: host, score: score}
