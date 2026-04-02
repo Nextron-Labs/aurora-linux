@@ -4,7 +4,7 @@
 
 Aurora Linux is a real-time Linux EDR agent.
 
-It attaches eBPF programs to kernel tracepoints, enriches the captured telemetry in user space, and evaluates each event against Sigma rules and IOC feeds to emit high-signal alerts in text or JSON. The goal is practical host detection with low overhead and clear, actionable output.
+It attaches eBPF programs to kernel tracepoints and ingests Linux audit logs, enriches the captured telemetry in user space, and evaluates each event against Sigma rules and IOC feeds to emit high-signal alerts in text or JSON. The goal is practical host detection with low overhead and clear, actionable output.
 
 ```mermaid
 flowchart LR
@@ -12,10 +12,12 @@ flowchart LR
     E1["sched_process_exec"]
     E2["sys_enter/sys_exit_openat"]
     E3["inet_sock_set_state"]
+    E4["sys_enter/sys_exit_utimensat"]
   end
 
   subgraph USER["User Space"]
     L["eBPF Listener"]
+    AU["Audit Provider"]
     C["Enrichment + Correlation"]
     S["Sigma Engine"]
   end
@@ -23,20 +25,34 @@ flowchart LR
   E1 --> L
   E2 --> L
   E3 --> L
+  E4 --> L
   L -->|ring buffers| C
+  AU -->|audit.log tail| C
   C -->|LRU parent cache| S
   S -->|JSON/text alerts| A["Alert Output"]
 ```
 
 ## What It Detects
 
-Aurora Linux loads standard [Sigma rules](https://github.com/SigmaHQ/sigma) for Linux and matches them in real time against three event types:
+Aurora Linux loads standard [Sigma rules](https://github.com/SigmaHQ/sigma) for Linux and matches them in real time against eBPF events and auditd logs:
 
-| Event Type | eBPF Hook | Example Detections |
+### eBPF Events
+
+| Event Type | Sysmon ID | eBPF Hook | Example Detections |
+|---|---|---|---|
+| **Process Creation** | 1 | `tracepoint/sched/sched_process_exec` | Reverse shells, base64 decode, webshell child processes, suspicious Java children |
+| **File Create Time Change** | 2 | `tracepoint/syscalls/sys_{enter,exit}_utimensat` | Timestomping detection (attackers hiding file modification times) |
+| **Network Connection** | 3 | `tracepoint/sock/inet_sock_set_state` | Bash reverse shells, malware callback ports, C2 on non-standard ports |
+| **File Event** | 11 | `tracepoint/syscalls/sys_{enter,exit}_openat` | Cron persistence, sudoers modification, rootkit lock files, downloads to /tmp |
+| **BPF Event** | 100 | `tracepoint/syscalls/sys_{enter,exit}_bpf` | Unauthorized BPF program loading, eBPF rootkit detection |
+
+### Auditd Events
+
+Aurora can also ingest Linux audit logs (`/var/log/audit/audit.log`) in real time and match them against [SigmaHQ linux/auditd rules](https://github.com/SigmaHQ/sigma/tree/master/rules/linux/auditd). Audit events are emitted with raw audit fields (`type`, `key`, `exe`, `comm`, `a0`, `a1`, `name`, `syscall`, ...) for direct compatibility with the upstream rule set.
+
+| Source | Mode | Example Detections |
 |---|---|---|
-| **Process Creation** | `tracepoint/sched/sched_process_exec` | Reverse shells, base64 decode, webshell child processes, suspicious Java children |
-| **File Creation** | `tracepoint/syscalls/sys_{enter,exit}_openat` | Cron persistence, sudoers modification, rootkit lock files, downloads to /tmp |
-| **Network Connection** | `tracepoint/sock/inet_sock_set_state` | Bash reverse shells, malware callback ports, C2 on non-standard ports |
+| **audit.log** | Real-time tail or batch file | Suspicious C2 commands, password policy discovery, ASLR disable, audio capture, system info discovery |
 
 ## Requirements
 
@@ -85,6 +101,9 @@ Linux note:
 ```bash
 # Point at the Linux Sigma root directory (subfolders are loaded recursively)
 sudo ./aurora --rules /path/to/sigma/rules/linux --json
+
+# With auditd log ingestion for real-time audit-based detection
+sudo ./aurora --rules /path/to/sigma/rules/linux --audit-log /var/log/audit/audit.log --json
 ```
 
 `--rules` is required. Aurora validates rule directories at startup and exits
@@ -253,6 +272,7 @@ When a Sigma rule matches, Aurora Linux emits a structured alert:
 | `--min-level` | info | Load only rules at or above this Sigma level (`info`, `low`, `medium`, `high`, `critical`) |
 | `--stats-interval` | 60 | Stats logging interval (seconds, 0=off) |
 | `--sigma-no-collapse-ws` | on | Disable Sigma whitespace collapsing during matching (default, reduces allocation churn; stricter matching) |
+| `--audit-log` | off | Paths to auditd log files (repeatable; enables audit provider with real-time tailing) |
 | `--pprof-listen` | off | Enable local pprof endpoint on loopback `host:port` (for on-demand profiling) |
 | `-v, --verbose` | off | Debug-level logging |
 
@@ -276,6 +296,8 @@ rules:
   - /opt/sigma/rules/linux
 filename-iocs: /opt/aurora-linux/resources/iocs/filename-iocs.txt
 c2-iocs: /opt/aurora-linux/resources/iocs/c2-iocs.txt
+audit-log:
+  - /var/log/audit/audit.log
 logfile: /var/log/aurora-linux/aurora.log
 logfile-format: syslog
 tcp-target: myserver.local:514
@@ -288,18 +310,28 @@ pprof-listen: 127.0.0.1:6060
 
 Aurora Linux follows a **provider → distributor → consumer** pipeline:
 
-- **Provider** (`lib/provider/ebpf/`) -- eBPF programs attach to kernel tracepoints and deliver events via ring buffers. A userland listener reconstructs full fields from `/proc/PID/*`.
+- **Provider: eBPF** (`lib/provider/ebpf/`) -- eBPF programs attach to kernel tracepoints and deliver events via ring buffers. A userland listener reconstructs full fields from `/proc/PID/*`.
+- **Provider: Audit** (`lib/provider/audit/`) -- Reads Linux audit logs (e.g. `/var/log/audit/audit.log`), groups multi-line records by audit serial, and emits events with raw audit fields for direct SigmaHQ rule compatibility. Supports real-time tailing.
 - **Distributor** (`lib/distributor/`) -- Applies enrichment functions (parent process correlation via LRU cache, UID→username resolution) and routes events to consumers.
 - **Consumer** (`lib/consumer/sigma/`) -- Evaluates events against loaded Sigma rules using [go-sigma-rule-engine](https://github.com/markuskont/go-sigma-rule-engine). Includes per-rule throttling to suppress duplicate alerts.
 - **Consumer** (`lib/consumer/ioc/`) -- Evaluates events against bundled IOC files (`filename-iocs.txt`, `c2-iocs.txt`) and emits IOC match alerts.
 
 ### Sigma Field Coverage
 
+**eBPF provider** (Sysmon-compatible fields):
+
 | Category | Sigma Fields Covered | Rule Coverage |
 |---|---|---|
 | `process_creation` | Image, CommandLine, ParentImage, ParentCommandLine, User, LogonId, CurrentDirectory | 119/119 rules (100%) |
-| `file_event` | TargetFilename, Image | 8/8 rules (100%) |
+| `file_event` | TargetFilename, Image, FileAction | 8/8 rules (100%) |
+| `file_create_time` | TargetFilename, Image, NewAccessTime, NewModificationTime | timestomping detection |
 | `network_connection` | Image, DestinationIp, DestinationPort, Initiated | 2/5 rules (40%) -- remaining 3 need DNS correlation |
+
+**Audit provider** (raw audit fields):
+
+| Category | Sigma Fields Covered |
+|---|---|
+| `linux/auditd` | type, syscall, key, exe, comm, a0-aN, name, nametype, cwd, proctitle, pid, ppid, uid, auid, SYSCALL, UID, AUID, and all other raw audit fields |
 
 ## Project Structure
 
@@ -310,6 +342,7 @@ aurora-linux/
 ├── scripts/                   Install + maintenance automation
 ├── lib/
 │   ├── provider/ebpf/         eBPF listener + BPF C programs
+│   ├── provider/audit/        Auditd log provider (real-time + batch)
 │   ├── provider/replay/       JSONL replay provider (for CI)
 │   ├── distributor/           Event routing + enrichment
 │   ├── enrichment/            DataFieldsMap, correlator cache

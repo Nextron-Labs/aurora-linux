@@ -78,6 +78,7 @@ func main() {
 	flags.IntVar(&params.StatsInterval, "stats-interval", params.StatsInterval, "Stats logging interval in seconds (0=disabled)")
 	flags.BoolVar(&params.SigmaNoCollapseWS, "sigma-no-collapse-ws", params.SigmaNoCollapseWS, "Disable sigma whitespace collapsing during pattern matching (default: true)")
 	flags.StringVar(&params.PprofListen, "pprof-listen", "", "Enable pprof HTTP endpoint on loopback host:port (example: 127.0.0.1:6060)")
+	flags.StringSliceVar(&params.AuditLogFiles, "audit-log", nil, "Paths to auditd log files to process (repeatable; enables audit provider)")
 
 	if err := rootCmd.Execute(); err != nil {
 		writeCLIError(err, params.JSONOutput, os.Stderr)
@@ -159,6 +160,8 @@ func applyCLIOverrides(set *pflag.FlagSet, dst *agent.Parameters, cli agent.Para
 			dst.SigmaNoCollapseWS = cli.SigmaNoCollapseWS
 		case "pprof-listen":
 			dst.PprofListen = cli.PprofListen
+		case "audit-log":
+			dst.AuditLogFiles = append([]string(nil), cli.AuditLogFiles...)
 		}
 	})
 }

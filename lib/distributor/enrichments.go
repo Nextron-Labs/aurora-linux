@@ -23,6 +23,9 @@ func RegisterLinuxEnrichments(enricher *enrichment.EventEnricher, correlator *en
 	enricher.Register("LinuxEBPF:3", func(fields enrichment.DataFieldsMap) {
 		enrichImageFromCache(fields, correlator)
 	})
+
+	// Audit provider: raw audit fields, no Sysmon EventID enrichment needed.
+	// Sigma rules match on native audit fields (type, key, exe, a0, ...).
 }
 
 // enrichParentFields fills ParentImage and ParentCommandLine from the

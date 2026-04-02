@@ -21,15 +21,17 @@ import (
 	"github.com/Nextron-Labs/aurora-linux/lib/enrichment"
 	"github.com/Nextron-Labs/aurora-linux/lib/logging"
 	"github.com/Nextron-Labs/aurora-linux/lib/provider"
+	auditprovider "github.com/Nextron-Labs/aurora-linux/lib/provider/audit"
 	ebpfprovider "github.com/Nextron-Labs/aurora-linux/lib/provider/ebpf"
 	log "github.com/sirupsen/logrus"
 )
 
 // Agent orchestrates the lifecycle of the Aurora Linux EDR agent.
 type Agent struct {
-	params     Parameters
-	listener   *ebpfprovider.Listener
-	dist       *distributor.Distributor
+	params        Parameters
+	listener      *ebpfprovider.Listener
+	auditProvider *auditprovider.AuditProvider
+	dist          *distributor.Distributor
 	consumer   *sigma.SigmaConsumer
 	ioc        *ioc.Consumer
 	correlator *enrichment.Correlator
@@ -155,6 +157,17 @@ func (a *Agent) Run() error {
 
 	log.Info("eBPF listener initialized, starting event collection")
 
+	// Create and initialize audit provider if audit log files are specified
+	if len(a.params.AuditLogFiles) > 0 {
+		a.auditProvider = auditprovider.New(a.params.AuditLogFiles...)
+		_ = a.auditProvider.AddSource(auditprovider.SourceAuditd)
+
+		if err := a.auditProvider.Initialize(); err != nil {
+			return fmt.Errorf("initializing audit provider: %w", err)
+		}
+		log.WithField("files", a.params.AuditLogFiles).Info("Audit log provider initialized")
+	}
+
 	// Start stats reporting
 	if a.params.StatsInterval > 0 {
 		a.statsStop = make(chan struct{})
@@ -167,7 +180,7 @@ func (a *Agent) Run() error {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
 
-	// Start event collection in a goroutine
+	// Start event collection in goroutines
 	doneCh := make(chan struct{})
 	go func() {
 		a.listener.SendEvents(func(event provider.Event) {
@@ -181,6 +194,19 @@ func (a *Agent) Run() error {
 		})
 		close(doneCh)
 	}()
+
+	// Start audit provider event collection if enabled
+	if a.auditProvider != nil {
+		go a.auditProvider.SendEvents(func(event provider.Event) {
+			if a.params.Trace {
+				a.traceEvent(event)
+			}
+			if a.shouldExcludeEvent(event) {
+				return
+			}
+			a.dist.HandleEvent(event)
+		})
+	}
 
 	// Wait for signal
 	sig := <-sigCh
@@ -211,6 +237,11 @@ func (a *Agent) shutdown() {
 	if a.listener != nil {
 		if err := a.listener.Close(); err != nil {
 			log.WithError(err).Warn("Failed to close eBPF listener cleanly")
+		}
+	}
+	if a.auditProvider != nil {
+		if err := a.auditProvider.Close(); err != nil {
+			log.WithError(err).Warn("Failed to close audit provider cleanly")
 		}
 	}
 	if a.consumer != nil {
