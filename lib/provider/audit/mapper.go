@@ -1,7 +1,6 @@
 package audit
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 
@@ -109,26 +108,3 @@ func isDigit(b byte) bool {
 	return b >= '0' && b <= '9'
 }
 
-// reassembleExecveArgs joins EXECVE a0, a1, ... fields into a command line.
-// Exported for use in enrichment if needed.
-func reassembleExecveArgs(fields map[string]string) string {
-	argc, _ := strconv.Atoi(fields["argc"])
-	if argc == 0 {
-		// Try to find args by scanning
-		for i := 0; ; i++ {
-			if _, ok := fields[fmt.Sprintf("a%d", i)]; !ok {
-				argc = i
-				break
-			}
-		}
-	}
-
-	args := make([]string, 0, argc)
-	for i := 0; i < argc; i++ {
-		key := fmt.Sprintf("a%d", i)
-		if val, ok := fields[key]; ok {
-			args = append(args, decodeHexField(val))
-		}
-	}
-	return strings.Join(args, " ")
-}
