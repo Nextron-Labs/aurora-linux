@@ -78,6 +78,9 @@ type Parameters struct {
 	// PprofListen enables a local pprof HTTP endpoint on host:port.
 	// Empty disables runtime profiling endpoints.
 	PprofListen string
+
+	// AuditLogFiles contains paths to auditd log files for the audit provider.
+	AuditLogFiles []string
 }
 
 // DefaultParameters returns parameters with sensible defaults.
