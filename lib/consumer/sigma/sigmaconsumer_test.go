@@ -420,6 +420,351 @@ func TestIsValidMinLevel(t *testing.T) {
 	}
 }
 
+// TestIsCorrelationRule verifies detection of all four Sigma correlation types
+// defined in the specification (https://sigmahq.io/docs/meta/correlations.html):
+// event_count, value_count, temporal, and ordered_temporal.
+func TestIsCorrelationRule(t *testing.T) {
+	dir := t.TempDir()
+
+	// Standard detection rule — should NOT be detected as correlation.
+	writeRuleFile(t, dir, "detect.yml", `title: Detect Something
+id: aaaa1111-1111-1111-1111-111111111111
+level: high
+logsource:
+  product: linux
+  category: process_creation
+detection:
+  selection:
+    Image|endswith: "/evil"
+  condition: selection
+`)
+
+	// event_count correlation rule.
+	writeRuleFile(t, dir, "event_count.yml", `title: PAM Bruteforce
+id: bbbb2222-2222-2222-2222-222222222222
+name: pam_bruteforce
+status: test
+level: high
+correlation:
+  type: event_count
+  rules:
+    - aaaa1111-1111-1111-1111-111111111111
+  group-by:
+    - TargetUser
+  timespan: 5m
+  condition:
+    gte: 5
+`)
+
+	// value_count correlation rule.
+	writeRuleFile(t, dir, "value_count.yml", `title: Login From Many Sources
+id: cccc3333-3333-3333-3333-333333333333
+name: login_spray
+status: test
+level: high
+correlation:
+  type: value_count
+  rules:
+    - aaaa1111-1111-1111-1111-111111111111
+  group-by:
+    - TargetUser
+  timespan: 15m
+  condition:
+    field: SourceIP
+    gte: 5
+`)
+
+	// temporal correlation rule.
+	writeRuleFile(t, dir, "temporal.yml", `title: Recon Then Exploit
+id: dddd4444-4444-4444-4444-444444444444
+name: recon_then_exploit
+status: test
+level: critical
+correlation:
+  type: temporal
+  rules:
+    - aaaa1111-1111-1111-1111-111111111111
+    - bbbb2222-2222-2222-2222-222222222222
+  group-by:
+    - SourceIP
+  timespan: 30m
+`)
+
+	// ordered_temporal correlation rule with aliases.
+	writeRuleFile(t, dir, "ordered_temporal.yml", `title: Staged Attack
+id: eeee5555-5555-5555-5555-555555555555
+name: staged_attack
+status: test
+level: critical
+correlation:
+  type: ordered_temporal
+  rules:
+    - aaaa1111-1111-1111-1111-111111111111
+    - bbbb2222-2222-2222-2222-222222222222
+  group-by:
+    - src
+  timespan: 10m
+  aliases:
+    src:
+      aaaa1111-1111-1111-1111-111111111111: SourceIP
+      bbbb2222-2222-2222-2222-222222222222: ClientAddr
+  generate: true
+`)
+
+	// Broken YAML — should return false.
+	writeRuleFile(t, dir, "broken.yml", `title: [broken`)
+
+	tests := []struct {
+		file string
+		want bool
+	}{
+		{"detect.yml", false},
+		{"event_count.yml", true},
+		{"value_count.yml", true},
+		{"temporal.yml", true},
+		{"ordered_temporal.yml", true},
+		{"broken.yml", false},
+	}
+	for _, tc := range tests {
+		got := isCorrelationRule(filepath.Join(dir, tc.file))
+		if got != tc.want {
+			t.Errorf("isCorrelationRule(%s) = %v, want %v", tc.file, got, tc.want)
+		}
+	}
+
+	// Missing file.
+	if isCorrelationRule(filepath.Join(dir, "nonexistent.yml")) {
+		t.Error("isCorrelationRule(nonexistent) = true, want false")
+	}
+}
+
+func TestInitializeWithRulesSkipsCorrelationRules(t *testing.T) {
+	dir := t.TempDir()
+	const detectID = "aaaa1111-1111-1111-1111-111111111111"
+
+	writeRuleFile(t, dir, "detect.yml", fmt.Sprintf(`title: Detect Something
+id: %s
+level: high
+logsource:
+  product: linux
+  category: process_creation
+detection:
+  selection:
+    Image|endswith: "/evil"
+  condition: selection
+`, detectID))
+
+	// One of each correlation type to verify none are misreported as failed.
+	writeRuleFile(t, dir, "corr_event_count.yml", `title: Event Count Correlation
+id: bbbb2222-2222-2222-2222-222222222222
+level: high
+correlation:
+  type: event_count
+  rules:
+    - aaaa1111-1111-1111-1111-111111111111
+  timespan: 5m
+  condition:
+    gte: 5
+`)
+	writeRuleFile(t, dir, "corr_value_count.yml", `title: Value Count Correlation
+id: cccc3333-3333-3333-3333-333333333333
+level: high
+correlation:
+  type: value_count
+  rules:
+    - aaaa1111-1111-1111-1111-111111111111
+  timespan: 15m
+  condition:
+    field: SourceIP
+    gte: 3
+`)
+	writeRuleFile(t, dir, "corr_temporal.yml", `title: Temporal Correlation
+id: dddd4444-4444-4444-4444-444444444444
+level: critical
+correlation:
+  type: temporal
+  rules:
+    - aaaa1111-1111-1111-1111-111111111111
+    - bbbb2222-2222-2222-2222-222222222222
+  group-by:
+    - SourceIP
+  timespan: 30m
+`)
+	writeRuleFile(t, dir, "corr_ordered_temporal.yml", `title: Ordered Temporal Correlation
+id: eeee5555-5555-5555-5555-555555555555
+level: critical
+correlation:
+  type: ordered_temporal
+  rules:
+    - aaaa1111-1111-1111-1111-111111111111
+    - dddd4444-4444-4444-4444-444444444444
+  group-by:
+    - SourceIP
+  timespan: 10m
+`)
+
+	consumer := New(Config{MinLevel: "info"})
+	if err := consumer.InitializeWithRules([]string{dir}); err != nil {
+		t.Fatalf("InitializeWithRules() error = %v", err)
+	}
+
+	// Only the detection rule should be in the sigma ruleset.
+	if got := len(consumer.ruleset.Rules); got != 1 {
+		t.Fatalf("detection rules = %d, want 1", got)
+	}
+	if consumer.ruleset.Rules[0].Rule.ID != detectID {
+		t.Fatalf("loaded rule ID = %q, want %q", consumer.ruleset.Rules[0].Rule.ID, detectID)
+	}
+
+	// All 4 correlation rules should be loaded into the correlation engine.
+	if consumer.correlationEngine == nil {
+		t.Fatal("correlationEngine is nil, want initialized engine")
+	}
+	if got := len(consumer.correlationEngine.rules); got != 4 {
+		t.Fatalf("correlation rules = %d, want 4", got)
+	}
+
+	// Correlation rules must not count as failed or unsupported.
+	if consumer.ruleset.Failed != 0 {
+		t.Fatalf("Failed = %d, want 0", consumer.ruleset.Failed)
+	}
+	if consumer.ruleset.Unsupported != 0 {
+		t.Fatalf("Unsupported = %d, want 0", consumer.ruleset.Unsupported)
+	}
+}
+
+// TestCorrelationEndToEndBruteforce loads a detection rule and a correlation
+// rule modeled after the user's real auditd setup, feeds matching events
+// through HandleEvent, and verifies the correlation fires at the threshold.
+func TestCorrelationEndToEndBruteforce(t *testing.T) {
+	dir := t.TempDir()
+	const baseRuleID = "e07736b6-4ce7-4aac-8713-dc4675ce2a3b"
+	const corrRuleID = "90bda967-643b-466a-afb1-0751f92bc388"
+
+	writeRuleFile(t, dir, "detect.yml", fmt.Sprintf(`title: Privilege Elevation Failure
+id: %s
+status: experimental
+description: Detects Privilege authentication failure via su or sudo
+author: Pierre-Henri Pezier
+date: 2026-04-09
+logsource:
+  product: linux
+  service: auditd
+detection:
+  selection_result:
+    res: failed
+  selection_exe:
+    exe|endswith:
+      - '/su'
+      - '/sudo'
+  condition: selection_result and selection_exe
+falsepositives:
+  - Legitimate administrative activity
+level: medium
+`, baseRuleID))
+
+	writeRuleFile(t, dir, "corr.yml", fmt.Sprintf(`title: SSH Authentication Bruteforce
+id: %s
+status: experimental
+description: Detects privilege elevation bruteforce attempts.
+author: Pierre-Henri Pezier
+date: 2026-04-09
+correlation:
+  type: event_count
+  rules:
+    - %s
+  timespan: 5m
+  condition:
+    gte: 5
+tags:
+  - brute_force
+  - attack.t1110
+falsepositives:
+  - Unknown
+level: high
+`, corrRuleID, baseRuleID))
+
+	var correlationOutput bytes.Buffer
+	matchLogger := log.New()
+	matchLogger.SetOutput(&correlationOutput)
+	matchLogger.SetFormatter(&log.JSONFormatter{DisableTimestamp: true})
+
+	consumer := New(Config{
+		Logger:   matchLogger,
+		MinLevel: "info",
+	})
+	if err := consumer.InitializeWithRules([]string{dir}); err != nil {
+		t.Fatalf("InitializeWithRules() error = %v", err)
+	}
+	if consumer.correlationEngine == nil {
+		t.Fatal("correlationEngine is nil")
+	}
+
+	now := time.Now()
+
+	// Send 4 matching events — should NOT trigger correlation yet.
+	for i := 0; i < 4; i++ {
+		evt := &testEvent{
+			ts: now.Add(time.Duration(i) * time.Second),
+			fields: enrichment.DataFieldsMap{
+				"exe": enrichment.NewStringValue("/usr/bin/su"),
+				"res": enrichment.NewStringValue("failed"),
+			},
+		}
+		if err := consumer.HandleEvent(evt); err != nil {
+			t.Fatalf("HandleEvent(%d) error = %v", i, err)
+		}
+	}
+
+	if strings.Contains(correlationOutput.String(), "Sigma correlation match") {
+		t.Fatal("correlation should NOT fire after only 4 events")
+	}
+
+	// 5th event: threshold reached.
+	evt5 := &testEvent{
+		ts: now.Add(4 * time.Second),
+		fields: enrichment.DataFieldsMap{
+			"exe": enrichment.NewStringValue("/usr/bin/su"),
+			"res": enrichment.NewStringValue("failed"),
+		},
+	}
+	if err := consumer.HandleEvent(evt5); err != nil {
+		t.Fatalf("HandleEvent(5) error = %v", err)
+	}
+
+	output := correlationOutput.String()
+	if !strings.Contains(output, "Sigma correlation match") {
+		t.Fatalf("expected 'Sigma correlation match' in output, got:\n%s", output)
+	}
+	if !strings.Contains(output, corrRuleID) {
+		t.Fatalf("expected correlation rule ID %s in output, got:\n%s", corrRuleID, output)
+	}
+
+	// Verify it's logged as high (error level in logrus).
+	var logged map[string]interface{}
+	// Find the correlation match line (skip base match lines).
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		if strings.Contains(line, "Sigma correlation match") {
+			if err := json.Unmarshal([]byte(line), &logged); err != nil {
+				t.Fatalf("failed to decode JSON: %v\nline: %s", err, line)
+			}
+			break
+		}
+	}
+	if logged == nil {
+		t.Fatal("could not find correlation match JSON line")
+	}
+	if got, _ := logged["level"].(string); got != "error" {
+		t.Errorf("level = %q, want error (high -> error)", got)
+	}
+	if got, _ := logged["correlation_type"].(string); got != "event_count" {
+		t.Errorf("correlation_type = %q, want event_count", got)
+	}
+	if got, _ := logged["sigma_rule"].(string); got != corrRuleID {
+		t.Errorf("sigma_rule = %q, want %s", got, corrRuleID)
+	}
+}
+
 func TestSigmaConsumerName(t *testing.T) {
 	consumer := New(Config{})
 	got := consumer.Name()

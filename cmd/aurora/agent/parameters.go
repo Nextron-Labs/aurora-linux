@@ -81,6 +81,9 @@ type Parameters struct {
 
 	// AuditLogFiles contains paths to auditd log files for the audit provider.
 	AuditLogFiles []string
+
+	// DryRun validates rules and IOCs then exits without starting event collection.
+	DryRun bool
 }
 
 // DefaultParameters returns parameters with sensible defaults.

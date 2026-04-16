@@ -33,6 +33,7 @@ type yamlConfig struct {
 	StatsInterval        *int     `yaml:"stats-interval"`
 	SigmaNoCollapseWS    *bool    `yaml:"sigma-no-collapse-ws"`
 	PprofListen          *string  `yaml:"pprof-listen"`
+	DryRun               *bool    `yaml:"dry-run"`
 }
 
 // ApplyConfigFile loads YAML configuration from path and applies only fields
@@ -125,6 +126,9 @@ func ApplyConfigFile(path string, params *Parameters) error {
 	}
 	if cfg.PprofListen != nil {
 		params.PprofListen = strings.TrimSpace(*cfg.PprofListen)
+	}
+	if cfg.DryRun != nil {
+		params.DryRun = *cfg.DryRun
 	}
 
 	return nil

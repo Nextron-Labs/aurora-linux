@@ -142,6 +142,11 @@ func (a *Agent) Run() error {
 	}
 	a.dist.RegisterConsumer(a.ioc)
 
+	if a.params.DryRun {
+		log.Info("Dry run completed successfully — all rules and IOCs validated")
+		return nil
+	}
+
 	// Create and initialize eBPF listener
 	a.listener = ebpfprovider.NewListener(a.correlator)
 

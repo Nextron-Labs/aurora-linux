@@ -92,7 +92,8 @@ func parseAuditID(s string) (string, float64, uint64, string, error) {
 }
 
 // parseKeyValuePairs parses the key=value portion of an audit line.
-// Handles bare values, double-quoted values, and hex-encoded values.
+// Handles bare values, double-quoted values, single-quoted nested blocks
+// (e.g. msg='op=PAM:authentication ... res=failed'), and hex-encoded values.
 func parseKeyValuePairs(raw string) map[string]string {
 	fields := make(map[string]string)
 	raw = strings.TrimSpace(raw)
@@ -108,7 +109,23 @@ func parseKeyValuePairs(raw string) map[string]string {
 		raw = raw[eqIdx+1:]
 
 		var value string
-		if len(raw) > 0 && raw[0] == '"' {
+		if len(raw) > 0 && raw[0] == '\'' {
+			// Single-quoted block (e.g. msg='op=PAM:authentication ... res=failed').
+			// Contains nested key=value pairs. Extract the block, parse the
+			// inner pairs as additional fields, and skip the outer key.
+			endQuote := strings.IndexByte(raw[1:], '\'')
+			if endQuote < 0 {
+				value = raw[1:]
+				raw = ""
+			} else {
+				inner := raw[1 : endQuote+1]
+				raw = raw[endQuote+2:]
+				for k, v := range parseKeyValuePairs(inner) {
+					fields[k] = v
+				}
+				continue
+			}
+		} else if len(raw) > 0 && raw[0] == '"' {
 			// Quoted value: read until closing quote
 			endQuote := strings.IndexByte(raw[1:], '"')
 			if endQuote < 0 {

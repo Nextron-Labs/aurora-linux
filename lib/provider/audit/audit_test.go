@@ -277,6 +277,41 @@ func TestSigmaRuleCompatibility(t *testing.T) {
 	}
 }
 
+// TestParseLineUserAuth tests parsing of USER_AUTH lines that contain a
+// single-quoted msg='...' block with nested key=value pairs (PAM events).
+func TestParseLineUserAuth(t *testing.T) {
+	line := `type=USER_AUTH msg=audit(1776333054.961:3018): pid=3799 uid=1000 auid=1000 ses=3 subj=unconfined msg='op=PAM:authentication grantors=? acct="root" exe="/usr/bin/su" hostname=? addr=? terminal=/dev/pts/2 res=failed'UID="user" AUID="user"`
+
+	parsed, err := parseLine(line)
+	if err != nil {
+		t.Fatalf("parseLine returned error: %v", err)
+	}
+	if parsed.RecordType != "USER_AUTH" {
+		t.Errorf("RecordType = %q, want USER_AUTH", parsed.RecordType)
+	}
+
+	// Fields from the single-quoted msg block must be extracted.
+	checks := map[string]string{
+		"pid":      "3799",
+		"uid":      "1000",
+		"exe":      "/usr/bin/su",
+		"res":      "failed",
+		"op":       "PAM:authentication",
+		"acct":     "root",
+		"terminal": "/dev/pts/2",
+		"UID":      "user",
+		"AUID":     "user",
+	}
+	for key, want := range checks {
+		got, ok := parsed.Fields[key]
+		if !ok {
+			t.Errorf("missing field %q (want %q)", key, want)
+		} else if got != want {
+			t.Errorf("field %q = %q, want %q", key, got, want)
+		}
+	}
+}
+
 // TestFullProviderFromFile tests the full provider reading from a temp file.
 func TestFullProviderFromFile(t *testing.T) {
 	tmpDir := t.TempDir()

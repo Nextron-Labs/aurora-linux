@@ -2,6 +2,7 @@ package sigma
 
 import (
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	sigma "github.com/markuskont/go-sigma-rule-engine"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/time/rate"
+	yaml "gopkg.in/yaml.v2"
 )
 
 // SigmaConsumer loads Sigma rules and evaluates events against them.
@@ -31,6 +33,9 @@ type SigmaConsumer struct {
 	throttleOn    bool
 	throttleRate  rate.Limit // matches per second
 	throttleBurst int
+
+	// Correlation
+	correlationEngine *CorrelationEngine
 
 	// Output
 	logger *log.Logger
@@ -99,15 +104,9 @@ func (s *SigmaConsumer) InitializeWithRules(ruleDirs []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	ruleset, err := sigma.NewRuleset(sigma.Config{
-		Directory:       ruleDirs,
-		FailOnRuleParse: false,
-		FailOnYamlParse: false,
-		NoCollapseWS:    s.noCollapse,
-	})
+	ruleset, corrRules, err := s.loadRulesWithDiagnostics(ruleDirs)
 	if err != nil {
-		log.WithError(err).Error("SigmaConsumer: failed to create sigma ruleset")
-		return fmt.Errorf("creating sigma ruleset: %w", err)
+		return err
 	}
 
 	filteredRules := make([]*sigma.Tree, 0, len(ruleset.Rules))
@@ -130,7 +129,11 @@ func (s *SigmaConsumer) InitializeWithRules(ruleDirs []string) error {
 	ruleset.Rules = filteredRules
 	s.ruleset = ruleset
 
-	if len(ruleDirs) > 0 && len(ruleset.Rules) == 0 {
+	if len(corrRules) > 0 {
+		s.correlationEngine = NewCorrelationEngine(corrRules)
+	}
+
+	if len(ruleDirs) > 0 && len(ruleset.Rules) == 0 && len(corrRules) == 0 {
 		return fmt.Errorf(
 			"no loadable Sigma rules found in %v for --min-level=%q (total=%d failed=%d unsupported=%d)",
 			ruleDirs, s.minLevel, ruleset.Total, ruleset.Failed, ruleset.Unsupported,
@@ -144,10 +147,124 @@ func (s *SigmaConsumer) InitializeWithRules(ruleDirs []string) error {
 		"min_level":    s.minLevel,
 		"failed":       ruleset.Failed,
 		"unsupported":  ruleset.Unsupported,
+		"correlation":  len(corrRules),
 		"filtered_out": ruleset.Ok - len(ruleset.Rules),
 	}).Info("Sigma rules loaded")
 
 	return nil
+}
+
+// loadRulesWithDiagnostics performs the same work as sigma.NewRuleset but logs
+// individual failure reasons so operators can fix broken rules.
+func (s *SigmaConsumer) loadRulesWithDiagnostics(ruleDirs []string) (*sigma.Ruleset, []*CorrelationRule, error) {
+	files, err := sigma.NewRuleFileList(ruleDirs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("scanning rule directories: %w", err)
+	}
+
+	var yamlFailed int
+	rules, err := sigma.NewRuleList(files, true, s.noCollapse)
+	if err != nil {
+		if bulkErr, ok := err.(sigma.ErrBulkParseYaml); ok {
+			yamlFailed = len(bulkErr.Errs)
+			for _, e := range bulkErr.Errs {
+				log.WithFields(log.Fields{
+					"file":  e.Path,
+					"error": e.Err.Error(),
+				}).Warn("Sigma rule YAML parse error")
+			}
+		} else {
+			return nil, nil, fmt.Errorf("parsing sigma rules: %w", err)
+		}
+	}
+
+	var astFailed, unsupported int
+	var corrRules []*CorrelationRule
+	set := make([]*sigma.Tree, 0, len(rules))
+	for _, raw := range rules {
+		if raw.Multipart {
+			unsupported++
+			log.WithFields(log.Fields{
+				"file":  raw.Path,
+				"rule":  ruleIdentifier(raw.Rule.ID, raw.Rule.Title),
+				"error": "multipart rules are not supported",
+			}).Warn("Sigma rule unsupported")
+			continue
+		}
+		// Correlation rules use a correlation: block instead of detection:.
+		// The library's Rule struct does not parse the type/correlation
+		// fields, so Detection ends up nil. Parse them with our own struct.
+		if raw.Detection == nil && isCorrelationRule(raw.Path) {
+			cr, parseErr := parseCorrelationRule(raw.Path)
+			if parseErr != nil {
+				astFailed++
+				log.WithFields(log.Fields{
+					"file":  raw.Path,
+					"rule":  ruleIdentifier(raw.Rule.ID, raw.Rule.Title),
+					"error": parseErr.Error(),
+				}).Warn("Sigma correlation rule parse error")
+			} else {
+				corrRules = append(corrRules, cr)
+			}
+			continue
+		}
+		tree, err := sigma.NewTree(raw)
+		if err != nil {
+			switch err.(type) {
+			case sigma.ErrUnsupportedToken, *sigma.ErrUnsupportedToken:
+				unsupported++
+				log.WithFields(log.Fields{
+					"file":  raw.Path,
+					"rule":  ruleIdentifier(raw.Rule.ID, raw.Rule.Title),
+					"error": err.Error(),
+				}).Warn("Sigma rule unsupported")
+			default:
+				astFailed++
+				log.WithFields(log.Fields{
+					"file":  raw.Path,
+					"rule":  ruleIdentifier(raw.Rule.ID, raw.Rule.Title),
+					"error": err.Error(),
+				}).Warn("Sigma rule parse error")
+			}
+			continue
+		}
+		set = append(set, tree)
+	}
+
+	return &sigma.Ruleset{
+		Rules:       set,
+		Total:       len(files),
+		Ok:          len(set),
+		Failed:      yamlFailed + astFailed,
+		Unsupported: unsupported,
+	}, corrRules, nil
+}
+
+// isCorrelationRule reads a YAML rule file and returns true if it contains a
+// top-level "correlation" key, indicating a Sigma correlation rule rather than
+// a standard detection rule.
+func isCorrelationRule(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var m map[string]interface{}
+	if err := yaml.Unmarshal(data, &m); err != nil {
+		return false
+	}
+	_, ok := m["correlation"]
+	return ok
+}
+
+// ruleIdentifier returns the best available identifier for a rule.
+func ruleIdentifier(id, title string) string {
+	if id != "" {
+		return id
+	}
+	if title != "" {
+		return title
+	}
+	return "(unknown)"
 }
 
 // HandleEvent evaluates the event against all loaded Sigma rules.
@@ -172,7 +289,17 @@ func (s *SigmaConsumer) HandleEvent(event provider.Event) error {
 			ruleID = result.Title
 		}
 
-		// Throttle check
+		// Feed every match to the correlation engine (before throttle —
+		// correlation counts events, not emitted alerts).
+		if s.correlationEngine != nil {
+			fields := extractFieldsFromEvent(event)
+			for _, cm := range s.correlationEngine.TrackMatch(ruleID, event.Time(), fields) {
+				s.matches.Add(1)
+				s.emitCorrelationMatch(event, cm)
+			}
+		}
+
+		// Throttle check for the base rule alert.
 		if !s.allowMatch(ruleID) {
 			continue
 		}
@@ -182,6 +309,61 @@ func (s *SigmaConsumer) HandleEvent(event provider.Event) error {
 	}
 
 	return nil
+}
+
+func extractFieldsFromEvent(event provider.Event) map[string]string {
+	fields := make(map[string]string)
+	event.ForEach(func(key, value string) {
+		fields[key] = value
+	})
+	return fields
+}
+
+// emitCorrelationMatch logs a correlation rule alert.
+func (s *SigmaConsumer) emitCorrelationMatch(event provider.Event, cm CorrelationMatch) {
+	cr := cm.Rule
+
+	fields := log.Fields{
+		"sigma_rule":        cr.ID,
+		"sigma_title":       cr.Title,
+		"correlation_type":  string(cr.Type),
+		"correlation_count": cm.Count,
+		"timestamp":         event.Time().Format(time.RFC3339Nano),
+	}
+
+	if cm.Group != "" {
+		fields["correlation_group"] = cm.Group
+	}
+	if cr.Author != "" {
+		fields["rule_author"] = cr.Author
+	}
+	if cr.Description != "" {
+		fields["rule_description"] = cr.Description
+	}
+	if cr.Level != "" {
+		fields["rule_level"] = cr.Level
+	}
+	if cr.Status != "" {
+		fields["rule_status"] = cr.Status
+	}
+	if cr.Path != "" {
+		fields["rule_path"] = cr.Path
+	}
+	if len(cr.Tags) > 0 {
+		fields["sigma_tags"] = cr.Tags
+	}
+	if len(cr.FalsePositives) > 0 {
+		fields["rule_falsepositives"] = cr.FalsePositives
+	}
+
+	logLevel := sigmaRuleLevelToLogLevel(cr.Level)
+	if s.logger != nil {
+		entry := log.Entry{Logger: s.logger, Data: fields}
+		entry.Log(logLevel, "Sigma correlation match")
+	} else {
+		entry := log.Entry{Logger: log.StandardLogger(), Data: fields}
+		entry.Log(logLevel, "Sigma correlation match")
+	}
 }
 
 // allowMatch checks the per-rule rate limiter. Returns true if this match
