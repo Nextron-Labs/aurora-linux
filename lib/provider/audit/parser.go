@@ -109,7 +109,13 @@ func parseKeyValuePairs(raw string) map[string]string {
 		raw = raw[eqIdx+1:]
 
 		var value string
-		if len(raw) > 0 && raw[0] == '\'' {
+		var firstByte byte
+		if len(raw) > 0 {
+			firstByte = raw[0]
+		}
+
+		switch {
+		case firstByte == '\'':
 			// Single-quoted block (e.g. msg='op=PAM:authentication ... res=failed').
 			// Contains nested key=value pairs. Extract the block, parse the
 			// inner pairs as additional fields, and skip the outer key.
@@ -125,7 +131,7 @@ func parseKeyValuePairs(raw string) map[string]string {
 				}
 				continue
 			}
-		} else if len(raw) > 0 && raw[0] == '"' {
+		case firstByte == '"':
 			// Quoted value: read until closing quote
 			endQuote := strings.IndexByte(raw[1:], '"')
 			if endQuote < 0 {
@@ -136,7 +142,7 @@ func parseKeyValuePairs(raw string) map[string]string {
 				value = raw[1 : endQuote+1]
 				raw = raw[endQuote+2:]
 			}
-		} else {
+		default:
 			// Unquoted value: read until next space
 			spaceIdx := strings.IndexByte(raw, ' ')
 			if spaceIdx < 0 {
