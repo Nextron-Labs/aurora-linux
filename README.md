@@ -2,9 +2,9 @@
 
 # Aurora Linux
 
-Aurora Linux is a real-time Linux EDR agent.
+Aurora Linux is a real-time host-based intrusion detection system (HIDS) for Linux.
 
-It attaches eBPF programs to kernel tracepoints (process exec, file open, network state changes, bpf syscalls, and file timestamp changes) and ingests Linux audit logs, enriches the captured telemetry in user space, and evaluates each event against Sigma rules and IOC feeds to emit high-signal alerts in text or JSON. The goal is practical host detection with low overhead and clear, actionable output.
+It attaches eBPF programs to kernel tracepoints (process exec, file open, network state changes, bpf syscalls, and file timestamp changes) and ingests Linux audit logs, enriches the captured telemetry in user space, and evaluates each event against Sigma rules, correlation rules, and IOC feeds to emit high-signal alerts in text or JSON. The goal is practical host detection with low overhead and clear, actionable output.
 
 ```mermaid
 flowchart LR
@@ -21,6 +21,7 @@ flowchart LR
     AU["Audit Provider"]
     C["Enrichment + Correlation"]
     S["Sigma Engine"]
+    CR["Correlation Engine"]
   end
 
   E1 --> L
@@ -31,7 +32,9 @@ flowchart LR
   L -->|ring buffers| C
   AU -->|audit.log tail| C
   C -->|LRU parent cache| S
+  S -->|base rule matches| CR
   S -->|JSON/text alerts| A["Alert Output"]
+  CR -->|threshold/temporal alerts| A
 ```
 
 ## What It Detects
@@ -55,6 +58,19 @@ Aurora can also ingest Linux audit logs (`/var/log/audit/audit.log`) in real tim
 | Source | Mode | Example Detections |
 |---|---|---|
 | **audit.log** | Real-time tail or batch file | Suspicious C2 commands, password policy discovery, ASLR disable, audio capture, system info discovery |
+
+### Sigma Correlation Rules
+
+Aurora supports [Sigma correlation rules](https://sigmahq.io/docs/meta/correlations.html), which aggregate base rule matches over time windows to detect patterns that no single event can reveal:
+
+| Correlation Type | Description | Example |
+|---|---|---|
+| `event_count` | Fires when a base rule matches N+ times within a time window | PAM authentication bruteforce (5 failed `su`/`sudo` in 5 minutes) |
+| `value_count` | Fires when N+ distinct values of a field appear within a time window | Login spray (same user from 5+ source IPs in 15 minutes) |
+| `temporal` | Fires when all referenced rules match within a time window (any order) | Reconnaissance followed by exploitation |
+| `ordered_temporal` | Fires when all referenced rules match in sequence within a time window | Staged attack chain |
+
+Correlation rules support `group-by` fields, field `aliases` across rules, and automatic suppression after firing.
 
 ## Requirements
 
@@ -276,6 +292,7 @@ When a Sigma rule matches, Aurora Linux emits a structured alert:
 | `--sigma-no-collapse-ws` | on | Disable Sigma whitespace collapsing during matching (default, reduces allocation churn; stricter matching) |
 | `--audit-log` | off | Paths to auditd log files (repeatable; enables audit provider with real-time tailing) |
 | `--pprof-listen` | off | Enable local pprof endpoint on loopback `host:port` (for on-demand profiling) |
+| `--dry-run` | off | Validate rules and IOCs then exit without starting event collection |
 | `-v, --verbose` | off | Debug-level logging |
 
 Operational notes:
@@ -315,7 +332,7 @@ Aurora Linux follows a **provider → distributor → consumer** pipeline:
 - **Provider: eBPF** (`lib/provider/ebpf/`) -- eBPF programs attach to kernel tracepoints and deliver events via ring buffers. A userland listener reconstructs full fields from `/proc/PID/*`.
 - **Provider: Audit** (`lib/provider/audit/`) -- Reads Linux audit logs (e.g. `/var/log/audit/audit.log`), groups multi-line records by audit serial, and emits events with raw audit fields for direct SigmaHQ rule compatibility. Supports real-time tailing.
 - **Distributor** (`lib/distributor/`) -- Applies enrichment functions (parent process correlation via LRU cache, UID→username resolution) and routes events to consumers.
-- **Consumer** (`lib/consumer/sigma/`) -- Evaluates events against loaded Sigma rules using [go-sigma-rule-engine](https://github.com/markuskont/go-sigma-rule-engine). Includes per-rule throttling to suppress duplicate alerts.
+- **Consumer** (`lib/consumer/sigma/`) -- Evaluates events against loaded Sigma rules using [go-sigma-rule-engine](https://github.com/markuskont/go-sigma-rule-engine). Includes per-rule throttling, a built-in correlation engine for Sigma correlation rules (`event_count`, `value_count`, `temporal`, `ordered_temporal`), and detailed per-rule failure diagnostics at startup.
 - **Consumer** (`lib/consumer/ioc/`) -- Evaluates events against bundled IOC files (`filename-iocs.txt`, `c2-iocs.txt`) and emits IOC match alerts.
 
 ### Sigma Field Coverage

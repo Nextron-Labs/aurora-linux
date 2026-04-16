@@ -100,7 +100,7 @@ func ValidateParameters(params Parameters) error {
 			return err
 		}
 	}
-	if params.NoStdout && params.LogFile == "" && params.TCPTarget == "" && params.UDPTarget == "" {
+	if !params.DryRun && params.NoStdout && params.LogFile == "" && params.TCPTarget == "" && params.UDPTarget == "" {
 		return fmt.Errorf("--no-stdout requires at least one enabled sink: --logfile, --tcp-target, or --udp-target")
 	}
 
