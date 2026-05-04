@@ -4,7 +4,7 @@
 
 Aurora Linux is a real-time Linux EDR agent.
 
-It attaches eBPF programs to kernel tracepoints (process exec, file open, network state changes, bpf syscalls, and file timestamp changes) and ingests Linux audit logs, enriches the captured telemetry in user space, and evaluates each event against Sigma rules and IOC feeds to emit high-signal alerts in text or JSON. The goal is practical host detection with low overhead and clear, actionable output.
+It attaches eBPF programs to kernel tracepoints (process exec, file open, network state changes, bpf syscalls, and file timestamp changes), ingests Linux audit logs, and tails syslog (file or journald), enriches the captured telemetry in user space, and evaluates each event against Sigma rules and IOC feeds to emit high-signal alerts in text or JSON. The goal is practical host detection with low overhead and clear, actionable output.
 
 ```mermaid
 flowchart LR
@@ -19,6 +19,7 @@ flowchart LR
   subgraph USER["User Space"]
     L["eBPF Listener"]
     AU["Audit Provider"]
+    SY["Syslog Provider"]
     C["Enrichment + Correlation"]
     S["Sigma Engine"]
   end
@@ -30,6 +31,7 @@ flowchart LR
   E5 --> L
   L -->|ring buffers| C
   AU -->|audit.log tail| C
+  SY -->|syslog file / journald tail| C
   C -->|LRU parent cache| S
   S -->|JSON/text alerts| A["Alert Output"]
 ```
@@ -55,6 +57,17 @@ Aurora can also ingest Linux audit logs (`/var/log/audit/audit.log`) in real tim
 | Source | Mode | Example Detections |
 |---|---|---|
 | **audit.log** | Real-time tail or batch file | Suspicious C2 commands, password policy discovery, ASLR disable, audio capture, system info discovery |
+
+### Syslog Events
+
+Aurora tails syslog across the major Linux distributions and matches the parsed lines against [SigmaHQ rules with `service: syslog`](https://github.com/SigmaHQ/sigma/tree/master/rules/linux). Two source types are supported and can be combined:
+
+| Source | Distributions | Default Paths |
+|---|---|---|
+| **Plain-text files** (rsyslog / syslog-ng) | Debian, Ubuntu, Mint, Pop!_OS, Kali, Raspberry Pi OS, RHEL, CentOS, Rocky, AlmaLinux, Fedora, Amazon Linux, Oracle Linux, SUSE/openSUSE, Arch (with rsyslog), Gentoo | `/var/log/syslog`, `/var/log/messages`, `/var/log/auth.log`, `/var/log/secure`, `/var/log/kern.log`, `/var/log/daemon.log` |
+| **journald** (`journalctl --follow`) | Fedora 31+, RHEL 8+ minimal, modern Arch, any systemd-only distro without rsyslog | n/a |
+
+Each parsed line yields an event with `raw`, `message`, `host`, `program`, `pid`, and `type=syslog` fields. Lines that don't match the ISO 8601 / RFC5424 / RFC3164 prefixes still emit an event with the full raw text so keyword-style sigma rules still get a chance to match. If none of the configured syslog sources can be opened at startup, Aurora fails fast with an actionable error rather than silently running blind.
 
 ## Requirements
 
@@ -106,6 +119,10 @@ sudo ./aurora --rules /path/to/sigma/rules/linux --json
 
 # With auditd log ingestion for real-time audit-based detection
 sudo ./aurora --rules /path/to/sigma/rules/linux --audit-log /var/log/audit/audit.log --json
+
+# With auto-detected syslog tailing (probes /var/log/{syslog,messages,...},
+# falls back to journalctl on systemd-only hosts)
+sudo ./aurora --rules /path/to/sigma/rules/linux --syslog-auto --json
 ```
 
 `--rules` is required. Aurora validates rule directories at startup and exits
@@ -275,6 +292,9 @@ When a Sigma rule matches, Aurora Linux emits a structured alert:
 | `--stats-interval` | 60 | Stats logging interval (seconds, 0=off) |
 | `--sigma-no-collapse-ws` | on | Disable Sigma whitespace collapsing during matching (default, reduces allocation churn; stricter matching) |
 | `--audit-log` | off | Paths to auditd log files (repeatable; enables audit provider with real-time tailing) |
+| `--syslog-file` | off | Paths to syslog files to tail (repeatable; e.g. `/var/log/syslog`, `/var/log/messages`) |
+| `--syslog-auto` | off | Auto-detect syslog files across distributions; falls back to journald when no file is available |
+| `--syslog-journald` | off | Tail the systemd journal via `journalctl --follow` (combinable with `--syslog-file`) |
 | `--pprof-listen` | off | Enable local pprof endpoint on loopback `host:port` (for on-demand profiling) |
 | `-v, --verbose` | off | Debug-level logging |
 
@@ -300,6 +320,7 @@ filename-iocs: /opt/aurora-linux/resources/iocs/filename-iocs.txt
 c2-iocs: /opt/aurora-linux/resources/iocs/c2-iocs.txt
 audit-log:
   - /var/log/audit/audit.log
+syslog-auto: true
 logfile: /var/log/aurora-linux/aurora.log
 logfile-format: syslog
 tcp-target: myserver.local:514
@@ -314,6 +335,7 @@ Aurora Linux follows a **provider → distributor → consumer** pipeline:
 
 - **Provider: eBPF** (`lib/provider/ebpf/`) -- eBPF programs attach to kernel tracepoints and deliver events via ring buffers. A userland listener reconstructs full fields from `/proc/PID/*`.
 - **Provider: Audit** (`lib/provider/audit/`) -- Reads Linux audit logs (e.g. `/var/log/audit/audit.log`), groups multi-line records by audit serial, and emits events with raw audit fields for direct SigmaHQ rule compatibility. Supports real-time tailing.
+- **Provider: Syslog** (`lib/provider/syslog/`) -- Tails plain-text syslog files (Debian/Ubuntu, RHEL/Fedora, SUSE, Arch, ...) and/or systemd-journald via `journalctl --follow`. Parses ISO 8601 / RFC5424 and RFC3164 timestamps and emits events with `raw`/`message`/`host`/`program`/`pid` fields. Auto-detects per-distribution paths; raises a startup error if no source is readable.
 - **Distributor** (`lib/distributor/`) -- Applies enrichment functions (parent process correlation via LRU cache, UID→username resolution) and routes events to consumers.
 - **Consumer** (`lib/consumer/sigma/`) -- Evaluates events against loaded Sigma rules using [go-sigma-rule-engine](https://github.com/markuskont/go-sigma-rule-engine). Includes per-rule throttling to suppress duplicate alerts.
 - **Consumer** (`lib/consumer/ioc/`) -- Evaluates events against bundled IOC files (`filename-iocs.txt`, `c2-iocs.txt`) and emits IOC match alerts.
@@ -336,6 +358,12 @@ Aurora Linux follows a **provider → distributor → consumer** pipeline:
 |---|---|
 | `linux/auditd` | type, syscall, key, exe, comm, a0-aN, name, nametype, cwd, proctitle, pid, ppid, uid, auid, SYSCALL, UID, AUID, and all other raw audit fields |
 
+**Syslog provider** (parsed line fields, both keyword and field-style sigma selections):
+
+| Category | Sigma Fields Covered |
+|---|---|
+| `linux/syslog` | raw, message, host, program, pid, ProcessId, Image, type=syslog (plus full-line keyword matching via the sigma engine's `Keywords()` interface) |
+
 ## Project Structure
 
 ```
@@ -346,6 +374,7 @@ aurora-linux/
 ├── lib/
 │   ├── provider/ebpf/         eBPF listener + BPF C programs
 │   ├── provider/audit/        Auditd log provider (real-time + batch)
+│   ├── provider/syslog/       Syslog provider (file tail + journald)
 │   ├── provider/replay/       JSONL replay provider (for CI)
 │   ├── distributor/           Event routing + enrichment
 │   ├── enrichment/            DataFieldsMap, correlator cache
