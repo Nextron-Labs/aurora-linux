@@ -33,6 +33,10 @@ type yamlConfig struct {
 	StatsInterval        *int     `yaml:"stats-interval"`
 	SigmaNoCollapseWS    *bool    `yaml:"sigma-no-collapse-ws"`
 	PprofListen          *string  `yaml:"pprof-listen"`
+	AuditLogFiles        []string `yaml:"audit-log"`
+	SyslogFiles          []string `yaml:"syslog-file"`
+	SyslogAuto           *bool    `yaml:"syslog-auto"`
+	SyslogJournald       *bool    `yaml:"syslog-journald"`
 }
 
 // ApplyConfigFile loads YAML configuration from path and applies only fields
@@ -125,6 +129,18 @@ func ApplyConfigFile(path string, params *Parameters) error {
 	}
 	if cfg.PprofListen != nil {
 		params.PprofListen = strings.TrimSpace(*cfg.PprofListen)
+	}
+	if cfg.AuditLogFiles != nil {
+		params.AuditLogFiles = append([]string(nil), cfg.AuditLogFiles...)
+	}
+	if cfg.SyslogFiles != nil {
+		params.SyslogFiles = append([]string(nil), cfg.SyslogFiles...)
+	}
+	if cfg.SyslogAuto != nil {
+		params.SyslogAuto = *cfg.SyslogAuto
+	}
+	if cfg.SyslogJournald != nil {
+		params.SyslogJournald = *cfg.SyslogJournald
 	}
 
 	return nil
