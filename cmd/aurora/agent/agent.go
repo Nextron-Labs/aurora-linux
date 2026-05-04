@@ -23,25 +23,27 @@ import (
 	"github.com/Nextron-Labs/aurora-linux/lib/provider"
 	auditprovider "github.com/Nextron-Labs/aurora-linux/lib/provider/audit"
 	ebpfprovider "github.com/Nextron-Labs/aurora-linux/lib/provider/ebpf"
+	syslogprovider "github.com/Nextron-Labs/aurora-linux/lib/provider/syslog"
 	log "github.com/sirupsen/logrus"
 )
 
 // Agent orchestrates the lifecycle of the Aurora Linux EDR agent.
 type Agent struct {
-	params        Parameters
-	listener      *ebpfprovider.Listener
-	auditProvider *auditprovider.AuditProvider
-	dist          *distributor.Distributor
-	consumer   *sigma.SigmaConsumer
-	ioc        *ioc.Consumer
-	correlator *enrichment.Correlator
-	enricher   *enrichment.EventEnricher
-	statsStop  chan struct{}
-	statsDone  chan struct{}
-	logFile    *os.File
-	closers    []func() error
-	pprofSrv   *http.Server
-	pprofAddr  string
+	params         Parameters
+	listener       *ebpfprovider.Listener
+	auditProvider  *auditprovider.AuditProvider
+	syslogProvider *syslogprovider.SyslogProvider
+	dist           *distributor.Distributor
+	consumer       *sigma.SigmaConsumer
+	ioc            *ioc.Consumer
+	correlator     *enrichment.Correlator
+	enricher       *enrichment.EventEnricher
+	statsStop      chan struct{}
+	statsDone      chan struct{}
+	logFile        *os.File
+	closers        []func() error
+	pprofSrv       *http.Server
+	pprofAddr      string
 }
 
 // New creates a new agent from the given parameters.
@@ -168,6 +170,25 @@ func (a *Agent) Run() error {
 		log.WithField("files", a.params.AuditLogFiles).Info("Audit log provider initialized")
 	}
 
+	// Create and initialize syslog provider when explicitly requested or
+	// when --syslog-auto is set. The provider raises a startup error if
+	// none of the resolved sources can be read.
+	if syslogCfg, enabled, err := a.resolveSyslogConfig(); err != nil {
+		return err
+	} else if enabled {
+		a.syslogProvider = syslogprovider.New(syslogCfg)
+		_ = a.syslogProvider.AddSource(syslogprovider.SourceSyslog)
+		_ = a.syslogProvider.AddSource(syslogprovider.SourceJournald)
+
+		if err := a.syslogProvider.Initialize(); err != nil {
+			return fmt.Errorf("initializing syslog provider: %w", err)
+		}
+		log.WithFields(log.Fields{
+			"files":    a.syslogProvider.Files(),
+			"journald": a.syslogProvider.JournaldEnabled(),
+		}).Info("Syslog provider initialized")
+	}
+
 	// Start stats reporting
 	if a.params.StatsInterval > 0 {
 		a.statsStop = make(chan struct{})
@@ -198,6 +219,19 @@ func (a *Agent) Run() error {
 	// Start audit provider event collection if enabled
 	if a.auditProvider != nil {
 		go a.auditProvider.SendEvents(func(event provider.Event) {
+			if a.params.Trace {
+				a.traceEvent(event)
+			}
+			if a.shouldExcludeEvent(event) {
+				return
+			}
+			a.dist.HandleEvent(event)
+		})
+	}
+
+	// Start syslog provider event collection if enabled
+	if a.syslogProvider != nil {
+		go a.syslogProvider.SendEvents(func(event provider.Event) {
 			if a.params.Trace {
 				a.traceEvent(event)
 			}
@@ -242,6 +276,11 @@ func (a *Agent) shutdown() {
 	if a.auditProvider != nil {
 		if err := a.auditProvider.Close(); err != nil {
 			log.WithError(err).Warn("Failed to close audit provider cleanly")
+		}
+	}
+	if a.syslogProvider != nil {
+		if err := a.syslogProvider.Close(); err != nil {
+			log.WithError(err).Warn("Failed to close syslog provider cleanly")
 		}
 	}
 	if a.consumer != nil {
@@ -586,6 +625,52 @@ func (a *Agent) printWelcomeBanner() {
 	b.WriteString("\n")
 
 	_, _ = fmt.Fprintln(log.StandardLogger().Out, b.String())
+}
+
+// resolveSyslogConfig builds the syslog provider configuration from the
+// agent's parameters. enabled=false means the provider should not be
+// started. An error is returned only when --syslog-auto is set but no
+// usable source is available on the host (so we surface the failure at
+// startup instead of silently running without syslog detection).
+func (a *Agent) resolveSyslogConfig() (cfg syslogprovider.Config, enabled bool, err error) {
+	hasFiles := len(a.params.SyslogFiles) > 0
+
+	if !hasFiles && !a.params.SyslogAuto && !a.params.SyslogJournald {
+		return syslogprovider.Config{}, false, nil
+	}
+
+	if hasFiles {
+		cfg.Files = append(cfg.Files, a.params.SyslogFiles...)
+	}
+	if a.params.SyslogJournald {
+		cfg.UseJournald = true
+	}
+
+	if a.params.SyslogAuto {
+		auto, ok := syslogprovider.AutoDetectConfig()
+		if !ok && !hasFiles && !cfg.UseJournald {
+			return cfg, true, fmt.Errorf(
+				"--syslog-auto: no readable syslog file on this host (tried %v) and journalctl is not available; install rsyslog/syslog-ng or pass --syslog-file explicitly",
+				syslogprovider.DefaultCandidatePaths(),
+			)
+		}
+		// Merge auto results with whatever was passed explicitly.
+		seen := make(map[string]bool, len(cfg.Files))
+		for _, f := range cfg.Files {
+			seen[f] = true
+		}
+		for _, f := range auto.Files {
+			if !seen[f] {
+				cfg.Files = append(cfg.Files, f)
+				seen[f] = true
+			}
+		}
+		if auto.UseJournald {
+			cfg.UseJournald = true
+		}
+	}
+
+	return cfg, true, nil
 }
 
 // openSecureLogFile opens a logfile path in append mode while refusing
