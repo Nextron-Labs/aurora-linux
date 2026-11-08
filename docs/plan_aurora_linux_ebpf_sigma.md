@@ -1,6 +1,7 @@
 # Aurora Linux — Technical Design & Implementation Plan
 
-Aurora Linux is a **standalone, open-source Linux EDR agent** that collects
+Aurora Linux is a **standalone, open-source Linux telemetry and detection
+agent** that collects
 system telemetry via eBPF, normalizes events into a Sigma-compatible schema, and
 matches them against Sigma rules in real time. Its architecture draws on the
 patterns established by the Windows-based Aurora agent (ETW + Sigma) but is an
@@ -1695,7 +1696,7 @@ for a dedicated `aurora` user.
 # deploy/aurora.service
 
 [Unit]
-Description=Aurora Linux EDR Agent
+Description=Aurora Linux Detection Agent
 After=network.target
 
 [Service]

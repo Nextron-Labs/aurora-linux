@@ -25,7 +25,7 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// Agent orchestrates the lifecycle of the Aurora Linux EDR agent.
+// Agent orchestrates the lifecycle of the Aurora Linux detection agent.
 type Agent struct {
 	params     Parameters
 	listener   *ebpfprovider.Listener
@@ -66,7 +66,7 @@ func (a *Agent) Run() error {
 	}
 
 	a.printWelcomeBanner()
-	log.Info("Aurora Linux EDR Agent starting")
+	log.Info("Aurora Linux detection agent starting")
 	log.WithFields(log.Fields{
 		"rules":             a.params.RuleDirs,
 		"filename_iocs":     a.params.FilenameIOCPath,
@@ -189,7 +189,7 @@ func (a *Agent) Run() error {
 	a.shutdown()
 	<-doneCh
 
-	log.Info("Aurora Linux EDR Agent stopped")
+	log.Info("Aurora Linux detection agent stopped")
 	return nil
 }
 

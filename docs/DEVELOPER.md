@@ -9,8 +9,8 @@ done. Read this before touching any source file.
 
 ## 1. What Is Aurora Linux?
 
-Aurora Linux is a standalone, open-source Linux EDR (Endpoint Detection &
-Response) agent. It:
+Aurora Linux is a standalone, open-source Linux telemetry and detection
+agent. It:
 
 1. Collects system telemetry in real time via **eBPF** tracepoints in the kernel.
 2. Normalizes each event into a flat key-value schema that Sigma rules understand.

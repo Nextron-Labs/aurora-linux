@@ -2,7 +2,7 @@
 
 # Aurora Linux
 
-Aurora Linux is a real-time Linux EDR agent.
+Aurora Linux is a real-time Linux telemetry and detection agent.
 
 It attaches eBPF programs to kernel tracepoints, enriches the captured telemetry in user space, and evaluates each event against Sigma rules and IOC feeds to emit high-signal alerts in text or JSON. The goal is practical host detection with low overhead and clear, actionable output.
 

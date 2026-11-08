@@ -22,7 +22,7 @@ func main() {
 
 	rootCmd := &cobra.Command{
 		Use:   "aurora",
-		Short: "Aurora Linux EDR Agent",
+		Short: "Aurora Linux detection agent",
 		Long:  helpLong(version),
 		Example: `  aurora --rules /opt/sigma/rules/linux --json
   aurora --rules /opt/sigma/rules/linux --rules /opt/custom/sigma --verbose`,
@@ -103,7 +103,7 @@ func helpLong(version string) string {
 		"",
 		fmt.Sprintf("(c) Florian Roth, 2026, %s", prettyVersion),
 		"",
-		"Aurora Linux is a standalone Linux EDR agent that collects system",
+		"Aurora Linux is a standalone Linux telemetry and detection agent that collects system",
 		"telemetry via eBPF, normalizes events into a Sigma-compatible schema, and",
 		"matches them against Sigma rules in real time.",
 	}

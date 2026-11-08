@@ -1,5 +1,5 @@
 [Unit]
-Description=Aurora Linux EDR Agent
+Description=Aurora Linux Detection Agent
 After=network.target
 
 [Service]
