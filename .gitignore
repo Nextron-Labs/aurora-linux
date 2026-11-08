@@ -31,3 +31,12 @@ go.work.sum
 # .idea/
 # .vscode/
 .claude/settings.local.json
+
+# Compiled binaries
+/aurora
+/aurora-util
+
+# Generated eBPF files (produced by go generate)
+lib/provider/ebpf/bpf/headers/
+lib/provider/ebpf/*_bpfel.go
+lib/provider/ebpf/*_bpfel.o

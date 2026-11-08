@@ -58,3 +58,18 @@ func (o *netMonitorObjects) Close() error { return nil }
 func loadNetMonitorObjects(objs *netMonitorObjects, opts *ciliumebpf.CollectionOptions) error {
 	return fmt.Errorf("BPF programs are only available on Linux; run go generate on a Linux host")
 }
+
+// bpfMonitorObjects holds the BPF objects for the bpf syscall monitor.
+type bpfMonitorObjects struct {
+	TraceSysEnterBpf *ciliumebpf.Program
+	TraceSysExitBpf  *ciliumebpf.Program
+	BpfEvents        *ciliumebpf.Map
+	BpfLostEvents    *ciliumebpf.Map
+	SelfPids         *ciliumebpf.Map
+}
+
+func (o *bpfMonitorObjects) Close() error { return nil }
+
+func loadBpfMonitorObjects(objs *bpfMonitorObjects, opts *ciliumebpf.CollectionOptions) error {
+	return fmt.Errorf("BPF programs are only available on Linux; run go generate on a Linux host")
+}

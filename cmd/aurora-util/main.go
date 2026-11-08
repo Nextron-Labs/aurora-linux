@@ -110,7 +110,7 @@ func main() {
 			return runUpgradeAurora(ctx, upOpts)
 		},
 	}
-	upgradeCmd.Flags().StringVar(&upOpts.Repo, "repo", "nicholasgasior/aurora-linux", "GitHub repository in owner/repo format")
+	upgradeCmd.Flags().StringVar(&upOpts.Repo, "repo", "Nextron-Labs/aurora-linux", "GitHub repository in owner/repo format")
 	upgradeCmd.Flags().StringVar(&upOpts.Version, "version", "latest", "Release tag to fetch (or \"latest\")")
 	upgradeCmd.Flags().StringVar(&upOpts.InstallPath, "install-path", "/opt/aurora-linux/aurora", "Destination path for the aurora binary")
 	upgradeCmd.Flags().StringVar(&upOpts.TargetOS, "os", runtime.GOOS, "Target operating system used for release asset matching")
@@ -334,9 +334,7 @@ func normalizePprofBaseURL(raw string) (string, error) {
 	}
 
 	cleanPath := strings.TrimSuffix(u.Path, "/")
-	if strings.HasSuffix(cleanPath, "/debug/pprof") {
-		cleanPath = strings.TrimSuffix(cleanPath, "/debug/pprof")
-	}
+	cleanPath = strings.TrimSuffix(cleanPath, "/debug/pprof")
 	if cleanPath == "/debug/pprof" {
 		cleanPath = ""
 	}
@@ -610,7 +608,7 @@ func extractSubdirFromTarGz(archivePath, sourceSubdir, destinationDir string) (i
 			if err := os.MkdirAll(targetPath, 0o755); err != nil {
 				return 0, fmt.Errorf("creating directory %q: %w", targetPath, err)
 			}
-		case tar.TypeReg, tar.TypeRegA:
+		case tar.TypeReg:
 			if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
 				return 0, fmt.Errorf("creating parent directory for %q: %w", targetPath, err)
 			}
@@ -725,7 +723,7 @@ func extractBestBinaryFromTarGz(archivePath, outputPath string, preferredNames [
 		if err != nil {
 			return "", fmt.Errorf("reading tar archive: %w", err)
 		}
-		if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != tar.TypeRegA {
+		if hdr.Typeflag != tar.TypeReg {
 			continue
 		}
 

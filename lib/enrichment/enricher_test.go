@@ -102,3 +102,94 @@ func TestEventEnricherAllowsRegisterDuringEnrich(t *testing.T) {
 		t.Fatal("Enrich() appears deadlocked while registering a manipulator")
 	}
 }
+
+func TestEventEnricherMultipleManipulatorsForSameKey(t *testing.T) {
+	enricher := NewEventEnricher()
+
+	callOrder := make([]int, 0, 3)
+
+	enricher.Register("TestProvider:1", func(fields DataFieldsMap) {
+		callOrder = append(callOrder, 1)
+		fields.AddField("First", "yes")
+	})
+
+	enricher.Register("TestProvider:1", func(fields DataFieldsMap) {
+		callOrder = append(callOrder, 2)
+		fields.AddField("Second", "yes")
+	})
+
+	enricher.Register("TestProvider:1", func(fields DataFieldsMap) {
+		callOrder = append(callOrder, 3)
+		// Can modify fields set by previous manipulators
+		if fields.Value("First").Valid {
+			fields.AddField("Third", "saw first")
+		}
+	})
+
+	fields := make(DataFieldsMap)
+	enricher.Enrich("TestProvider:1", fields)
+
+	// All three manipulators should have been called
+	if len(callOrder) != 3 {
+		t.Fatalf("callOrder = %v, want 3 calls", callOrder)
+	}
+
+	// Order should be preserved (FIFO)
+	if callOrder[0] != 1 || callOrder[1] != 2 || callOrder[2] != 3 {
+		t.Fatalf("callOrder = %v, want [1 2 3]", callOrder)
+	}
+
+	// All fields should be set
+	if !fields.Value("First").Valid {
+		t.Error("First not set")
+	}
+	if !fields.Value("Second").Valid {
+		t.Error("Second not set")
+	}
+	if !fields.Value("Third").Valid || fields.Value("Third").String != "saw first" {
+		t.Errorf("Third = %v", fields.Value("Third"))
+	}
+}
+
+func TestEventEnricherNoManipulatorsRegistered(t *testing.T) {
+	enricher := NewEventEnricher()
+
+	fields := make(DataFieldsMap)
+	fields.AddField("Original", "value")
+
+	// Should not panic when no manipulators registered
+	enricher.Enrich("UnregisteredKey", fields)
+
+	// Original field should be unchanged
+	if !fields.Value("Original").Valid || fields.Value("Original").String != "value" {
+		t.Errorf("Original = %v", fields.Value("Original"))
+	}
+}
+
+func TestDataFieldsMapWithNilValue(t *testing.T) {
+	m := make(DataFieldsMap)
+	m["NilEntry"] = nil
+
+	v := m.Value("NilEntry")
+	if v.Valid {
+		t.Error("Value for nil entry should not be valid")
+	}
+}
+
+func TestDataFieldsMapForEachSkipsNilValues(t *testing.T) {
+	m := make(DataFieldsMap)
+	m["Good"] = NewStringValue("value")
+	m["Nil"] = nil
+
+	count := 0
+	m.ForEach(func(key, value string) {
+		count++
+		if key == "Nil" {
+			t.Error("ForEach should skip nil values")
+		}
+	})
+
+	if count != 1 {
+		t.Errorf("ForEach count = %d, want 1", count)
+	}
+}

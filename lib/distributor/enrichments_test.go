@@ -3,7 +3,7 @@ package distributor
 import (
 	"testing"
 
-	"github.com/nicholasgasior/aurora-linux/lib/enrichment"
+	"github.com/Nextron-Labs/aurora-linux/lib/enrichment"
 )
 
 func TestEnrichParentFieldsIgnoresInvalidParentProcessID(t *testing.T) {

@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/nicholasgasior/aurora-linux/lib/provider"
+	"github.com/Nextron-Labs/aurora-linux/lib/provider"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -43,8 +43,8 @@ type Consumer struct {
 	cfg Config
 
 	filenameEntries []filenameIOCEntry
-	c2Domains       map[string]struct{}
-	c2IPs           map[string]struct{}
+	c2Domains       map[string]c2IOCEntry
+	c2IPs           map[string]c2IOCEntry
 
 	logger *log.Logger
 
@@ -117,9 +117,9 @@ func (c *Consumer) HandleEvent(event provider.Event) error {
 		switch key {
 		case "DestinationIp":
 			if ip := normalizeIP(value); ip != "" {
-				if _, ok := c.c2IPs[ip]; ok {
+				if entry, ok := c.c2IPs[ip]; ok {
 					c.matches.Add(1)
-					c.emitC2Match(event, key, value, ip)
+					c.emitC2Match(event, key, value, entry)
 				}
 			}
 		case "DestinationHostname":
@@ -127,9 +127,9 @@ func (c *Consumer) HandleEvent(event provider.Event) error {
 			if host == "" {
 				continue
 			}
-			if _, ok := c.c2Domains[host]; ok {
+			if entry, ok := c.c2Domains[host]; ok {
 				c.matches.Add(1)
-				c.emitC2Match(event, key, value, host)
+				c.emitC2Match(event, key, value, entry)
 			}
 		}
 	}
@@ -138,12 +138,15 @@ func (c *Consumer) HandleEvent(event provider.Event) error {
 }
 
 func (c *Consumer) emitFilenameMatch(event provider.Event, field, value string, entry filenameIOCEntry) {
+	level, levelName := scoreToLevel(entry.score)
+
 	fields := log.Fields{
 		"ioc_type":       "filename",
 		"ioc_field":      field,
 		"ioc_value":      sanitizeFieldForLogging(field, value),
 		"ioc_regex":      entry.rawPattern,
 		"ioc_score":      entry.score,
+		"ioc_level":      levelName,
 		"ioc_line":       entry.line,
 		"ioc_source":     filepath.Base(strings.TrimSpace(c.cfg.FilenameIOCPath)),
 		"event_provider": event.ID().ProviderName,
@@ -158,15 +161,19 @@ func (c *Consumer) emitFilenameMatch(event provider.Event, field, value string, 
 	addEventFields(fields, event)
 
 	entryLog := log.Entry{Logger: effectiveLogger(c.logger), Data: fields}
-	entryLog.Log(logLevelForFilenameScore(entry.score), "IOC match")
+	entryLog.Log(level, "IOC match")
 }
 
-func (c *Consumer) emitC2Match(event provider.Event, field, value, indicator string) {
+func (c *Consumer) emitC2Match(event provider.Event, field, value string, entry c2IOCEntry) {
+	level, levelName := scoreToLevel(entry.score)
+
 	fields := log.Fields{
 		"ioc_type":       "c2",
 		"ioc_field":      field,
 		"ioc_value":      sanitizeFieldForLogging(field, value),
-		"ioc_indicator":  indicator,
+		"ioc_indicator":  entry.indicator,
+		"ioc_score":      entry.score,
+		"ioc_level":      levelName,
 		"ioc_source":     filepath.Base(strings.TrimSpace(c.cfg.C2IOCPath)),
 		"event_provider": event.ID().ProviderName,
 		"event_id":       event.ID().EventID,
@@ -177,7 +184,7 @@ func (c *Consumer) emitC2Match(event provider.Event, field, value, indicator str
 	addEventFields(fields, event)
 
 	entryLog := log.Entry{Logger: effectiveLogger(c.logger), Data: fields}
-	entryLog.Log(log.ErrorLevel, "IOC match")
+	entryLog.Log(level, "IOC match")
 }
 
 func addEventFields(fields log.Fields, event provider.Event) {
@@ -200,15 +207,39 @@ func effectiveLogger(logger *log.Logger) *log.Logger {
 	return log.StandardLogger()
 }
 
-func logLevelForFilenameScore(score int) log.Level {
+// scoreToLevel maps a numeric IOC score (0–100) to a log level and a
+// human-readable level name aligned with the Sigma severity scale.
+//
+// The mapping mirrors how Sigma rule levels translate to log output:
+//
+//	Score 0–39   → info       → log.InfoLevel
+//	Score 40–59  → low        → log.InfoLevel
+//	Score 60–74  → medium     → log.WarnLevel
+//	Score 75–89  → high       → log.ErrorLevel
+//	Score 90–100 → critical   → log.ErrorLevel
+//
+// This keeps IOC-based alerts consistent with Sigma-based alerts so
+// that downstream consumers (SIEM, dashboards) can filter uniformly.
+func scoreToLevel(score int) (log.Level, string) {
 	switch {
-	case score >= 80:
-		return log.ErrorLevel
+	case score >= 90:
+		return log.ErrorLevel, "critical"
+	case score >= 75:
+		return log.ErrorLevel, "high"
 	case score >= 60:
-		return log.WarnLevel
+		return log.WarnLevel, "medium"
+	case score >= 40:
+		return log.InfoLevel, "low"
 	default:
-		return log.InfoLevel
+		return log.InfoLevel, "info"
 	}
+}
+
+// logLevelForFilenameScore is kept for backwards compatibility in tests
+// that reference the old function name. New code should use scoreToLevel.
+func logLevelForFilenameScore(score int) log.Level {
+	level, _ := scoreToLevel(score)
+	return level
 }
 
 func sanitizeFieldForLogging(key, value string) string {

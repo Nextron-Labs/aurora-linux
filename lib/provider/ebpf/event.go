@@ -3,8 +3,8 @@ package ebpf
 import (
 	"time"
 
-	"github.com/nicholasgasior/aurora-linux/lib/enrichment"
-	"github.com/nicholasgasior/aurora-linux/lib/provider"
+	"github.com/Nextron-Labs/aurora-linux/lib/enrichment"
+	"github.com/Nextron-Labs/aurora-linux/lib/provider"
 )
 
 const (
@@ -14,6 +14,7 @@ const (
 	EventIDProcessCreation   uint16 = 1
 	EventIDNetworkConnection uint16 = 3
 	EventIDFileEvent         uint16 = 11
+	EventIDBpfEvent          uint16 = 100
 )
 
 // ebpfEvent is the concrete Event implementation for events from the eBPF provider.

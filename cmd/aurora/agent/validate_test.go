@@ -232,3 +232,200 @@ func TestValidateParametersAcceptsLoopbackPprofListen(t *testing.T) {
 		t.Fatalf("ValidateParameters() unexpected error: %v", err)
 	}
 }
+
+func TestValidateHostPortWithPort0(t *testing.T) {
+	err := validateHostPort("--tcp-target", "127.0.0.1:0")
+	if err == nil {
+		t.Fatal("validateHostPort() expected error for port 0")
+	}
+	if !strings.Contains(err.Error(), "1-65535") {
+		t.Fatalf("expected port range error, got %v", err)
+	}
+}
+
+func TestValidateHostPortWithPort65536(t *testing.T) {
+	err := validateHostPort("--tcp-target", "127.0.0.1:65536")
+	if err == nil {
+		t.Fatal("validateHostPort() expected error for port 65536")
+	}
+	if !strings.Contains(err.Error(), "1-65535") {
+		t.Fatalf("expected port range error, got %v", err)
+	}
+}
+
+func TestValidateHostPortWithEmptyHost(t *testing.T) {
+	err := validateHostPort("--tcp-target", ":8080")
+	if err == nil {
+		t.Fatal("validateHostPort() expected error for empty host")
+	}
+	if !strings.Contains(err.Error(), "must include a host") {
+		t.Fatalf("expected host error, got %v", err)
+	}
+}
+
+func TestValidateHostPortWithNonNumericPort(t *testing.T) {
+	err := validateHostPort("--tcp-target", "localhost:abc")
+	if err == nil {
+		t.Fatal("validateHostPort() expected error for non-numeric port")
+	}
+	if !strings.Contains(err.Error(), "numeric port") {
+		t.Fatalf("expected numeric port error, got %v", err)
+	}
+}
+
+func TestIsLoopbackHostWithBracketedIPv6(t *testing.T) {
+	// Bracketed IPv6 notation like [::1] shouldn't parse as IP directly
+	if isLoopbackHost("[::1]") {
+		t.Fatal("isLoopbackHost([::1]) should return false (brackets not stripped)")
+	}
+
+	// Without brackets should work
+	if !isLoopbackHost("::1") {
+		t.Fatal("isLoopbackHost(::1) should return true")
+	}
+}
+
+func TestIsLoopbackHostWithLocalhost(t *testing.T) {
+	if !isLoopbackHost("localhost") {
+		t.Fatal("isLoopbackHost(localhost) should return true")
+	}
+	if !isLoopbackHost("LOCALHOST") {
+		t.Fatal("isLoopbackHost(LOCALHOST) should return true (case insensitive)")
+	}
+}
+
+func TestIsLoopbackHostWithIPv4Loopback(t *testing.T) {
+	if !isLoopbackHost("127.0.0.1") {
+		t.Fatal("isLoopbackHost(127.0.0.1) should return true")
+	}
+	if !isLoopbackHost("127.0.0.255") {
+		t.Fatal("isLoopbackHost(127.0.0.255) should return true")
+	}
+}
+
+func TestIsLoopbackHostWithNonLoopback(t *testing.T) {
+	if isLoopbackHost("192.168.1.1") {
+		t.Fatal("isLoopbackHost(192.168.1.1) should return false")
+	}
+	if isLoopbackHost("example.com") {
+		t.Fatal("isLoopbackHost(example.com) should return false")
+	}
+	if isLoopbackHost("0.0.0.0") {
+		t.Fatal("isLoopbackHost(0.0.0.0) should return false")
+	}
+}
+
+func TestValidateLoopbackHostPortWithBracketedIPv6(t *testing.T) {
+	// [::1] is valid IPv6 notation for net.SplitHostPort
+	// After splitting, host = "::1" which is loopback
+	// However, isLoopbackHost receives "::1" (without brackets)
+	err := validateLoopbackHostPort("--pprof-listen", "[::1]:6060")
+	if err != nil {
+		t.Fatalf("validateLoopbackHostPort([::1]:6060) unexpected error: %v", err)
+	}
+}
+
+func TestValidateLoopbackHostPortWithUnbracketedIPv6(t *testing.T) {
+	// Unbracketed IPv6 with port is ambiguous and should fail parsing
+	err := validateLoopbackHostPort("--pprof-listen", "::1:6060")
+	// This will fail because ::1:6060 is ambiguous (colons in IPv6)
+	if err == nil {
+		t.Fatal("validateLoopbackHostPort() expected error for ambiguous IPv6")
+	}
+}
+
+func TestIsPowerOfTwo(t *testing.T) {
+	tests := []struct {
+		value int
+		want  bool
+	}{
+		{0, false},
+		{1, true},
+		{2, true},
+		{3, false},
+		{4, true},
+		{5, false},
+		{1024, true},
+		{2048, true},
+		{3000, false},
+		{-1, false},
+		{-2, false},
+	}
+
+	for _, tc := range tests {
+		if got := isPowerOfTwo(tc.value); got != tc.want {
+			t.Errorf("isPowerOfTwo(%d) = %v, want %v", tc.value, got, tc.want)
+		}
+	}
+}
+
+func TestValidateParametersRejectsEmptyRulesPath(t *testing.T) {
+	params := DefaultParameters()
+	params.RuleDirs = []string{"   "}
+
+	err := ValidateParameters(params)
+	if err == nil {
+		t.Fatal("ValidateParameters() expected error for empty rules path")
+	}
+}
+
+func TestValidateParametersRejectsZeroCorrelationCache(t *testing.T) {
+	tmpDir := t.TempDir()
+	params := DefaultParameters()
+	params.RuleDirs = []string{tmpDir}
+	params.CorrelationCacheSize = 0
+
+	err := ValidateParameters(params)
+	if err == nil {
+		t.Fatal("ValidateParameters() expected error for zero correlation cache")
+	}
+	if !strings.Contains(err.Error(), "--correlation-cache") {
+		t.Fatalf("expected --correlation-cache context, got %v", err)
+	}
+}
+
+func TestValidateParametersRejectsNegativeThrottleRate(t *testing.T) {
+	tmpDir := t.TempDir()
+	params := DefaultParameters()
+	params.RuleDirs = []string{tmpDir}
+	params.ThrottleRate = -1
+
+	err := ValidateParameters(params)
+	if err == nil {
+		t.Fatal("ValidateParameters() expected error for negative throttle rate")
+	}
+	if !strings.Contains(err.Error(), "--throttle-rate") {
+		t.Fatalf("expected --throttle-rate context, got %v", err)
+	}
+}
+
+func TestValidateParametersRejectsThrottleRateWithoutBurst(t *testing.T) {
+	tmpDir := t.TempDir()
+	params := DefaultParameters()
+	params.RuleDirs = []string{tmpDir}
+	params.ThrottleRate = 1.0
+	params.ThrottleBurst = 0
+
+	err := ValidateParameters(params)
+	if err == nil {
+		t.Fatal("ValidateParameters() expected error for throttle rate without burst")
+	}
+	if !strings.Contains(err.Error(), "--throttle-burst") {
+		t.Fatalf("expected --throttle-burst context, got %v", err)
+	}
+}
+
+func TestValidateParametersRejectsNegativeStatsInterval(t *testing.T) {
+	tmpDir := t.TempDir()
+	params := DefaultParameters()
+	params.RuleDirs = []string{tmpDir}
+	params.StatsInterval = -1
+
+	err := ValidateParameters(params)
+	if err == nil {
+		t.Fatal("ValidateParameters() expected error for negative stats interval")
+	}
+	if !strings.Contains(err.Error(), "--stats-interval") {
+		t.Fatalf("expected --stats-interval context, got %v", err)
+	}
+}

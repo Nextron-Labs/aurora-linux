@@ -11,8 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/nicholasgasior/aurora-linux/lib/enrichment"
-	"github.com/nicholasgasior/aurora-linux/lib/provider"
+	"github.com/Nextron-Labs/aurora-linux/lib/enrichment"
+	"github.com/Nextron-Labs/aurora-linux/lib/provider"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -228,6 +228,8 @@ func defaultSourceForEvent(providerName string, eventID uint16) string {
 		return "LinuxEBPF:NetConnect"
 	case 11:
 		return "LinuxEBPF:FileCreate"
+	case 100:
+		return "LinuxEBPF:BpfEvent"
 	default:
 		return ""
 	}

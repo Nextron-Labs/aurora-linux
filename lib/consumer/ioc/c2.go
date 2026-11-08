@@ -4,15 +4,26 @@ import (
 	"bufio"
 	"errors"
 	"os"
+	"strconv"
 	"strings"
 
 	log "github.com/sirupsen/logrus"
 )
 
-func loadC2IOCs(path string, required bool) (map[string]struct{}, map[string]struct{}, error) {
+// c2IOCEntry holds a single C2 indicator with its optional score.
+type c2IOCEntry struct {
+	indicator string
+	score     int
+}
+
+// defaultC2Score is the score assigned to C2 IOCs without an explicit score.
+// C2 indicators are inherently high-severity, so they default to a high score.
+const defaultC2Score = 80
+
+func loadC2IOCs(path string, required bool) (map[string]c2IOCEntry, map[string]c2IOCEntry, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
-		return map[string]struct{}{}, map[string]struct{}{}, nil
+		return map[string]c2IOCEntry{}, map[string]c2IOCEntry{}, nil
 	}
 
 	f, err := os.Open(path)
@@ -25,12 +36,12 @@ func loadC2IOCs(path string, required bool) (map[string]struct{}, map[string]str
 		} else {
 			log.WithError(err).WithField("path", path).Warn("Failed to open C2 IOC file; C2 IOC matching disabled")
 		}
-		return map[string]struct{}{}, map[string]struct{}{}, nil
+		return map[string]c2IOCEntry{}, map[string]c2IOCEntry{}, nil
 	}
 	defer f.Close()
 
-	domains := make(map[string]struct{})
-	ips := make(map[string]struct{})
+	domains := make(map[string]c2IOCEntry)
+	ips := make(map[string]c2IOCEntry)
 
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
@@ -48,17 +59,37 @@ func loadC2IOCs(path string, required bool) (map[string]struct{}, map[string]str
 			continue
 		}
 
-		if ip := normalizeIP(raw); ip != "" {
-			ips[ip] = struct{}{}
+		// Parse optional score suffix: INDICATOR;SCORE
+		indicator := raw
+		score := defaultC2Score
+		if idx := strings.LastIndex(raw, ";"); idx >= 0 {
+			candidateScore := strings.TrimSpace(raw[idx+1:])
+			if s, err := strconv.Atoi(candidateScore); err == nil {
+				indicator = strings.TrimSpace(raw[:idx])
+				score = s
+			}
+			// If the part after ; is not a number, treat the whole
+			// line as the indicator (preserves backwards compatibility
+			// for entries that might legitimately contain a semicolon).
+		}
+
+		if ip := normalizeIP(indicator); ip != "" {
+			ips[ip] = c2IOCEntry{indicator: ip, score: score}
 			continue
 		}
 
-		host := normalizeDomain(raw)
+		host := normalizeDomain(indicator)
 		if !isLikelyDomain(host) {
-			warnSkipIOCLine(path, lineNo, "invalid domain or IP")
+			// Give a specific hint when ':' is present — likely a
+			// mistyped score separator (should be ';' not ':').
+			if strings.Contains(indicator, ":") {
+				warnSkipIOCLine(path, lineNo, "indicator contains ':' (not valid in FQDN — use ';' as score separator)")
+			} else {
+				warnSkipIOCLine(path, lineNo, "invalid domain or IP")
+			}
 			continue
 		}
-		domains[host] = struct{}{}
+		domains[host] = c2IOCEntry{indicator: host, score: score}
 	}
 
 	if err := scanner.Err(); err != nil {

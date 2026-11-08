@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nicholasgasior/aurora-linux/lib/logging"
+	"github.com/Nextron-Labs/aurora-linux/lib/logging"
 	log "github.com/sirupsen/logrus"
 )
 
