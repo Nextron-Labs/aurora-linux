@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -94,4 +95,64 @@ func resolveFilename(pid uint32, filename string, dfd int32) string {
 		return full
 	}
 	return resolved
+}
+
+// clockTickNs is the length of one USER_HZ tick in /proc/PID/stat (always 100 Hz on Linux).
+const clockTickNs = 10_000_000
+
+// parseStatStartTicks extracts field 22 (starttime, in clock ticks since boot)
+// from the contents of /proc/PID/stat. The command name (field 2) may contain
+// spaces and parentheses, so parsing starts after the last ')'.
+func parseStatStartTicks(stat string) (uint64, bool) {
+	i := strings.LastIndexByte(stat, ')')
+	if i < 0 {
+		return 0, false
+	}
+	f := strings.Fields(stat[i+1:])
+	// f[0] is field 3 (state); starttime is field 22 => f[19].
+	if len(f) < 20 {
+		return 0, false
+	}
+	v, err := strconv.ParseUint(f[19], 10, 64)
+	return v, err == nil
+}
+
+// startMatches reports whether /proc's start time for a process equals the
+// kernel-reported start time (within one tick), i.e. the pid still refers to
+// the same process.
+func startMatches(procStartTicks, kernelStartNs uint64) bool {
+	procNs := procStartTicks * clockTickNs
+	d := int64(procNs) - int64(kernelStartNs)
+	if d < 0 {
+		d = -d
+	}
+	return d <= 2*clockTickNs
+}
+
+// readStartTicks reads the start time of pid from /proc/PID/stat.
+func readStartTicks(pid uint32) (uint64, bool) {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return 0, false
+	}
+	return parseStatStartTicks(string(data))
+}
+
+// readCmdlineIfSame returns /proc/PID/cmdline only if pid still refers to the
+// process that started at startNs (no pid reuse).
+func readCmdlineIfSame(pid uint32, startNs uint64) ([]byte, bool) {
+	ticks, ok := readStartTicks(pid)
+	if !ok || !startMatches(ticks, startNs) {
+		return nil, false
+	}
+	b, err := readCmdline(pid)
+	if err != nil {
+		return nil, false
+	}
+	// Re-check: the process may have exited and the pid been reused while we
+	// read.
+	if t2, ok := readStartTicks(pid); !ok || t2 != ticks {
+		return nil, false
+	}
+	return b, true
 }

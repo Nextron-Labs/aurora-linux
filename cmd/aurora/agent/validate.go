@@ -62,6 +62,21 @@ func ValidateParameters(params Parameters) error {
 	if !sigmaconsumer.IsValidMinLevel(params.MinLevel) {
 		return fmt.Errorf("--min-level must be one of: info, low, medium, high, critical (got %q)", params.MinLevel)
 	}
+	if _, err := params.ResolveAuditMode(); err != nil {
+		return err
+	}
+	if _, err := params.ResolveTamperMode(); err != nil {
+		return err
+	}
+	if params.LogFile != "" {
+		if out, err := os.Stat(params.LogFile); err == nil {
+			for _, in := range params.SyslogFiles {
+				if st, err := os.Stat(in); err == nil && os.SameFile(st, out) {
+					return fmt.Errorf("--syslog-log %q is Aurora's own --logfile: alerts would be re-ingested in a loop", in)
+				}
+			}
+		}
+	}
 	if params.StatsInterval < 0 {
 		return fmt.Errorf("--stats-interval must be >= 0, got %d", params.StatsInterval)
 	}

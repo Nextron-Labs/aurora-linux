@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	ebpfprovider "github.com/Nextron-Labs/aurora-linux/lib/provider/ebpf"
 	"io"
 	"os"
 	"strings"
@@ -16,6 +17,14 @@ import (
 var version = "0.2.0"
 
 func main() {
+	// Anti-tamper canary helper: spawned by Aurora itself, never by users.
+	if len(os.Args) == 2 && (os.Args[1] == ebpfprovider.CanaryArg || os.Args[1] == ebpfprovider.CanaryStage2Arg) {
+		if err := ebpfprovider.RunCanaryChild(os.Args[1]); err != nil {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
 	params := agent.DefaultParameters()
 	params.Version = version
 	var configPath string
@@ -78,7 +87,12 @@ func main() {
 	flags.IntVar(&params.StatsInterval, "stats-interval", params.StatsInterval, "Stats logging interval in seconds (0=disabled)")
 	flags.BoolVar(&params.SigmaNoCollapseWS, "sigma-no-collapse-ws", params.SigmaNoCollapseWS, "Disable sigma whitespace collapsing during pattern matching (default: true)")
 	flags.StringVar(&params.PprofListen, "pprof-listen", "", "Enable pprof HTTP endpoint on loopback host:port (example: 127.0.0.1:6060)")
-	flags.StringSliceVar(&params.AuditLogFiles, "audit-log", nil, "Paths to auditd log files to process (repeatable; enables audit provider)")
+	flags.StringSliceVar(&params.SyslogFiles, "syslog-log", nil, "Optional: syslog-style log file to tail for the Sigma syslog/auth/sshd/cron rules (repeatable, e.g. /var/log/syslog, /var/log/auth.log, /var/log/messages)")
+	flags.BoolVar(&params.SyslogJournal, "syslog-journal", false, "Optional: also follow the systemd journal as syslog input (needs journalctl)")
+	flags.StringVar(&params.TamperProtection, "tamper-protection", "", "Anti-tamper mode: detect (default: alert on kill/ptrace/eBPF interference, canary self-test), enforce (also deny via BPF-LSM; blocks other tracing eBPF tools) or off")
+	flags.BoolVar(&params.StrictRules, "strict-rules", false, "Fail at startup if any Sigma rule cannot be loaded or can never match on this host (unsupported logsource/fields)")
+	flags.StringVar(&params.AuditMode, "audit-mode", "", "Source of auditd-compatible records for the Sigma linux/auditd rules: ebpf (default, no auditd needed), auditd (tail audit log instead), both, or off")
+	flags.StringSliceVar(&params.AuditLogFiles, "audit-log", nil, "Paths to auditd log files to process (repeatable; default /var/log/audit/audit.log in --audit-mode auditd or both; without --audit-mode, implies --audit-mode auditd)")
 
 	if err := rootCmd.Execute(); err != nil {
 		writeCLIError(err, params.JSONOutput, os.Stderr)
@@ -160,6 +174,16 @@ func applyCLIOverrides(set *pflag.FlagSet, dst *agent.Parameters, cli agent.Para
 			dst.SigmaNoCollapseWS = cli.SigmaNoCollapseWS
 		case "pprof-listen":
 			dst.PprofListen = cli.PprofListen
+		case "syslog-log":
+			dst.SyslogFiles = append([]string(nil), cli.SyslogFiles...)
+		case "syslog-journal":
+			dst.SyslogJournal = cli.SyslogJournal
+		case "tamper-protection":
+			dst.TamperProtection = cli.TamperProtection
+		case "strict-rules":
+			dst.StrictRules = cli.StrictRules
+		case "audit-mode":
+			dst.AuditMode = cli.AuditMode
 		case "audit-log":
 			dst.AuditLogFiles = append([]string(nil), cli.AuditLogFiles...)
 		}

@@ -32,3 +32,6 @@ func (e *auditEvent) Time() time.Time                             { return e.ts 
 func (e *auditEvent) Value(fieldname string) enrichment.DataValue { return e.fields.Value(fieldname) }
 func (e *auditEvent) ForEach(fn func(key, value string))          { e.fields.ForEach(fn) }
 func (e *auditEvent) Fields() enrichment.DataFieldsMap            { return e.fields }
+
+// Services returns the Sigma logsource services of audit log events.
+func (e *auditEvent) Services() []string { return []string{"auditd"} }

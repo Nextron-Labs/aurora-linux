@@ -12,6 +12,8 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -23,25 +25,31 @@ import (
 	"github.com/Nextron-Labs/aurora-linux/lib/provider"
 	auditprovider "github.com/Nextron-Labs/aurora-linux/lib/provider/audit"
 	ebpfprovider "github.com/Nextron-Labs/aurora-linux/lib/provider/ebpf"
+	syslogprovider "github.com/Nextron-Labs/aurora-linux/lib/provider/syslog"
 	log "github.com/sirupsen/logrus"
 )
 
 // Agent orchestrates the lifecycle of the Aurora Linux detection agent.
 type Agent struct {
-	params        Parameters
-	listener      *ebpfprovider.Listener
-	auditProvider *auditprovider.AuditProvider
-	dist          *distributor.Distributor
-	consumer   *sigma.SigmaConsumer
-	ioc        *ioc.Consumer
-	correlator *enrichment.Correlator
-	enricher   *enrichment.EventEnricher
-	statsStop  chan struct{}
-	statsDone  chan struct{}
-	logFile    *os.File
-	closers    []func() error
-	pprofSrv   *http.Server
-	pprofAddr  string
+	params         Parameters
+	listener       *ebpfprovider.Listener
+	auditProvider  *auditprovider.AuditProvider
+	syslogProvider *syslogprovider.Provider
+	dist           *distributor.Distributor
+	consumer       *sigma.SigmaConsumer
+	ioc            *ioc.Consumer
+	correlator     *enrichment.Correlator
+	enricher       *enrichment.EventEnricher
+	statsStop      chan struct{}
+	statsDone      chan struct{}
+	logFile        *os.File
+	closers        []func() error
+	pprofSrv       *http.Server
+	pprofAddr      string
+	tamper         atomic.Pointer[tamperGuard]
+	// providers tracks every provider's event loop (eBPF, audit log,
+	// syslog) so consumers are only closed after their callbacks returned.
+	providers sync.WaitGroup
 }
 
 // New creates a new agent from the given parameters.
@@ -67,6 +75,15 @@ func (a *Agent) Run() error {
 		}
 	}
 
+	auditMode, err := a.params.ResolveAuditMode()
+	if err != nil {
+		return err
+	}
+	tamperMode, err := a.params.ResolveTamperMode()
+	if err != nil {
+		return err
+	}
+
 	a.printWelcomeBanner()
 	log.Info("Aurora Linux detection agent starting")
 	log.WithFields(log.Fields{
@@ -83,6 +100,10 @@ func (a *Agent) Run() error {
 		"tcp_target":        a.params.TCPTarget,
 		"udp_target":        a.params.UDPTarget,
 		"pprof_listen":      a.params.PprofListen,
+		"audit_mode":        auditMode,
+		"tamper_protection": tamperMode,
+		"syslog_files":      a.params.SyslogFiles,
+		"syslog_journal":    a.params.SyslogJournal,
 	}).Info("Configuration")
 
 	if a.params.RingBufSizePages != DefaultParameters().RingBufSizePages {
@@ -110,12 +131,15 @@ func (a *Agent) Run() error {
 
 	// Create and initialize Sigma consumer
 	a.consumer = sigma.New(sigma.Config{
-		RuleDirs:      a.params.RuleDirs,
-		Logger:        sigmaLogger,
-		ThrottleRate:  a.params.ThrottleRate,
-		ThrottleBurst: a.params.ThrottleBurst,
-		MinLevel:      a.params.MinLevel,
-		NoCollapseWS:  a.params.SigmaNoCollapseWS,
+		RuleDirs:          a.params.RuleDirs,
+		Logger:            sigmaLogger,
+		ThrottleRate:      a.params.ThrottleRate,
+		ThrottleBurst:     a.params.ThrottleBurst,
+		MinLevel:          a.params.MinLevel,
+		NoCollapseWS:      a.params.SigmaNoCollapseWS,
+		StrictRules:       a.params.StrictRules,
+		FieldKnown:        fieldCatalog(auditMode, a.syslogEnabled()),
+		LogsourceServices: logsourceServices(auditMode, a.syslogEnabled()),
 	})
 
 	if err := a.consumer.Initialize(); err != nil {
@@ -142,14 +166,27 @@ func (a *Agent) Run() error {
 	}
 	a.dist.RegisterConsumer(a.ioc)
 
+	// Aurora's pid as the kernel sees it (differs inside a pid namespace);
+	// all BPF self-exclusion and protection maps are keyed by it.
+	hostPID, err := ebpfprovider.DiscoverHostPID()
+	if err != nil {
+		log.WithError(err).Debug("Host pid discovery failed; assuming no pid namespace")
+	}
+
 	// Create and initialize eBPF listener
 	a.listener = ebpfprovider.NewListener(a.correlator)
+	a.listener.SetHostPID(hostPID)
 
 	// Enable all sources (errors are checked during Initialize)
 	_ = a.listener.AddSource(ebpfprovider.SourceProcessExec)
 	_ = a.listener.AddSource(ebpfprovider.SourceFileCreate)
 	_ = a.listener.AddSource(ebpfprovider.SourceNetConnect)
 	_ = a.listener.AddSource(ebpfprovider.SourceBpfEvent)
+	if auditMode == AuditModeEBPF || auditMode == AuditModeBoth {
+		// Native replacement for auditd: synthesise the auditd records the
+		// Sigma linux/auditd rules match on.
+		_ = a.listener.AddSource(ebpfprovider.SourceAudit)
+	}
 
 	if err := a.listener.Initialize(); err != nil {
 		return fmt.Errorf("initializing eBPF listener: %w", err)
@@ -157,15 +194,22 @@ func (a *Agent) Run() error {
 
 	log.Info("eBPF listener initialized, starting event collection")
 
-	// Create and initialize audit provider if audit log files are specified
-	if len(a.params.AuditLogFiles) > 0 {
-		a.auditProvider = auditprovider.New(a.params.AuditLogFiles...)
+	// Legacy mode: tail auditd log files instead of using the eBPF records.
+	if auditMode == AuditModeEBPF && len(a.params.AuditLogFiles) > 0 {
+		log.Warn("--audit-log is ignored with --audit-mode ebpf; use --audit-mode auditd or both")
+	}
+	if auditMode == AuditModeAuditd || auditMode == AuditModeBoth {
+		files := a.params.AuditLogFiles
+		if len(files) == 0 {
+			files = []string{DefaultAuditLogPath}
+		}
+		a.auditProvider = auditprovider.New(files...)
 		_ = a.auditProvider.AddSource(auditprovider.SourceAuditd)
 
 		if err := a.auditProvider.Initialize(); err != nil {
 			return fmt.Errorf("initializing audit provider: %w", err)
 		}
-		log.WithField("files", a.params.AuditLogFiles).Info("Audit log provider initialized")
+		log.WithField("files", files).Info("Audit log provider initialized")
 	}
 
 	// Start stats reporting
@@ -180,10 +224,33 @@ func (a *Agent) Run() error {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
 
+	if a.syslogEnabled() {
+		a.syslogProvider = syslogprovider.New(a.params.SyslogFiles, a.params.SyslogJournal)
+		if err := a.syslogProvider.Initialize(); err != nil {
+			return fmt.Errorf("initializing syslog provider: %w", err)
+		}
+		a.providers.Add(1)
+		go func() {
+			defer a.providers.Done()
+			a.syslogProvider.SendEvents(func(event provider.Event) {
+				if a.params.Trace {
+					a.traceEvent(event)
+				}
+				a.dist.HandleEvent(event)
+			})
+		}()
+	}
+
+	a.startTamperProtection(tamperMode, sigmaLogger, hostPID)
+
 	// Start event collection in goroutines
-	doneCh := make(chan struct{})
+	a.providers.Add(1)
 	go func() {
+		defer a.providers.Done()
 		a.listener.SendEvents(func(event provider.Event) {
+			if a.isCanaryEvent(event) {
+				return
+			}
 			if a.params.Trace {
 				a.traceEvent(event)
 			}
@@ -192,32 +259,58 @@ func (a *Agent) Run() error {
 			}
 			a.dist.HandleEvent(event)
 		})
-		close(doneCh)
 	}()
 
 	// Start audit provider event collection if enabled
 	if a.auditProvider != nil {
-		go a.auditProvider.SendEvents(func(event provider.Event) {
-			if a.params.Trace {
-				a.traceEvent(event)
-			}
-			if a.shouldExcludeEvent(event) {
-				return
-			}
-			a.dist.HandleEvent(event)
-		})
+		a.providers.Add(1)
+		go func() {
+			defer a.providers.Done()
+			a.auditProvider.SendEvents(func(event provider.Event) {
+				if a.isCanaryEvent(event) {
+					return
+				}
+				if a.params.Trace {
+					a.traceEvent(event)
+				}
+				if a.shouldExcludeEvent(event) {
+					return
+				}
+				a.dist.HandleEvent(event)
+			})
+		}()
 	}
 
 	// Wait for signal
 	sig := <-sigCh
 	log.WithField("signal", sig).Info("Received shutdown signal")
+	if a.tamper.Load() != nil {
+		// Give the tamper sensor a moment to report who sent the signal.
+		time.Sleep(300 * time.Millisecond)
+	}
 
-	// Graceful shutdown
+	// Graceful shutdown: providers first, then wait until their event
+	// callbacks have returned before consumers are closed.
 	a.shutdown()
-	<-doneCh
 
 	log.Info("Aurora Linux detection agent stopped")
 	return nil
+}
+
+// providerDrainTimeout bounds how long shutdown waits for the providers'
+// event loops to return after they were closed.
+const providerDrainTimeout = 10 * time.Second
+
+// waitProviders waits until every provider's event loop returned, so no
+// callback runs into closed consumers or outputs.
+func (a *Agent) waitProviders(timeout time.Duration) {
+	done := make(chan struct{})
+	go func() { a.providers.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		log.Warn("Event providers did not stop in time; closing consumers anyway")
+	}
 }
 
 // shutdown performs a graceful shutdown of all components.
@@ -233,17 +326,24 @@ func (a *Agent) shutdown() {
 		a.statsDone = nil
 	}
 	a.stopPprofEndpoint()
+	if g := a.tamper.Swap(nil); g != nil {
+		g.close()
+	}
 
 	if a.listener != nil {
 		if err := a.listener.Close(); err != nil {
 			log.WithError(err).Warn("Failed to close eBPF listener cleanly")
 		}
 	}
+	if a.syslogProvider != nil {
+		_ = a.syslogProvider.Close()
+	}
 	if a.auditProvider != nil {
 		if err := a.auditProvider.Close(); err != nil {
 			log.WithError(err).Warn("Failed to close audit provider cleanly")
 		}
 	}
+	a.waitProviders(providerDrainTimeout)
 	if a.consumer != nil {
 		if err := a.consumer.Close(); err != nil {
 			log.WithError(err).Warn("Failed to close Sigma consumer cleanly")
@@ -537,9 +637,11 @@ func (a *Agent) traceEvent(event provider.Event) {
 		"event_process":  event.Process(),
 		"event_time":     event.Time().UTC().Format(time.RFC3339Nano),
 	}
-	event.ForEach(func(key string, value string) {
+	raw := make(map[string]string, 16)
+	event.ForEach(func(key string, value string) { raw[key] = value })
+	for key, value := range sigma.RedactFields(raw) { // never trace secrets in clear text
 		fields["event_"+key] = value
-	})
+	}
 	log.WithFields(fields).Debug("Trace event")
 }
 
@@ -619,4 +721,59 @@ func openSecureLogFile(path string) (*os.File, error) {
 	}
 
 	return f, nil
+}
+
+// fieldCatalog returns the predicate that tells the Sigma consumer which
+// fields the enabled event sources can emit.
+func fieldCatalog(auditMode string, syslog bool) func(service, field string) bool {
+	return func(service, field string) bool {
+		if isSyslogService(service) {
+			return syslog && syslogprovider.KnownFields[field]
+		}
+		if service != "auditd" {
+			return ebpfprovider.IsSysmonStyleField(field)
+		}
+		switch auditMode {
+		case AuditModeAuditd:
+			return true // raw audit log: any field can appear
+		case AuditModeBoth:
+			return true
+		case AuditModeEBPF:
+			return ebpfprovider.IsAuditStyleField(field)
+		}
+		return false
+	}
+}
+
+// isCanaryEvent reports whether e was produced by the anti-tamper canary
+// helper and must be hidden from detection.
+func (a *Agent) isCanaryEvent(e provider.Event) bool {
+	g := a.tamper.Load()
+	return g != nil && g.canary.Observe(e)
+}
+
+func isSyslogService(s string) bool {
+	for _, x := range syslogprovider.AllServices {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+// syslogEnabled reports whether the optional syslog input is configured.
+func (a *Agent) syslogEnabled() bool {
+	return len(a.params.SyslogFiles) > 0 || a.params.SyslogJournal
+}
+
+// logsourceServices lists the Sigma logsource services the enabled inputs feed.
+func logsourceServices(auditMode string, syslog bool) []string {
+	s := []string{} // non-nil: an empty list must not fall back to the default
+	if auditMode != AuditModeOff {
+		s = append(s, "auditd")
+	}
+	if syslog {
+		s = append(s, syslogprovider.AllServices...)
+	}
+	return s
 }
