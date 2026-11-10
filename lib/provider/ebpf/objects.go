@@ -82,19 +82,6 @@ func programID(p *ebpf.Program) (ebpf.ProgramID, bool) {
 	return info.ID()
 }
 
-func collectionProgramIDs(c *ebpf.Collection) []ebpf.ProgramID {
-	var ids []ebpf.ProgramID
-	if c == nil {
-		return ids
-	}
-	for _, p := range c.Programs {
-		if id, ok := programID(p); ok {
-			ids = append(ids, id)
-		}
-	}
-	return ids
-}
-
 // OwnObjects returns the IDs of every BPF program, map and link the listener
 // created.
 func (l *Listener) OwnObjects() BPFObjectIDs {

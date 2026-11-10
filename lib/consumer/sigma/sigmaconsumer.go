@@ -189,8 +189,8 @@ func (s *SigmaConsumer) InitializeWithRules(ruleDirs []string) error {
 		}
 
 		filteredRules = append(filteredRules, tree)
-		ruleServices = append(ruleServices, strings.ToLower(tree.Rule.Logsource.Service))
-		ruleCategories = append(ruleCategories, strings.ToLower(tree.Rule.Logsource.Category))
+		ruleServices = append(ruleServices, strings.ToLower(tree.Rule.Service))
+		ruleCategories = append(ruleCategories, strings.ToLower(tree.Rule.Category))
 
 		lookupKey := ruleLookupKey(tree.Rule.ID, tree.Rule.Title)
 		s.ruleLevels[lookupKey] = tree.Rule.Level

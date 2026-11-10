@@ -660,15 +660,8 @@ type execDetails struct {
 	argv     []string
 }
 
-// parseExecEvent parses a raw exec event from the ring buffer and reconstructs
-// all fields from /proc.
-func (l *Listener) parseExecEvent(data []byte) (*ebpfEvent, error) {
-	evt, _, err := l.parseExecEventDetails(data)
-	return evt, err
-}
-
-// parseExecEventDetails is parseExecEvent plus the details needed to derive
-// auditd-compatible records.
+// parseExecEventDetails parses a raw exec event from the ring buffer and
+// returns it with the details needed to derive auditd-compatible records.
 func (l *Listener) parseExecEventDetails(data []byte) (*ebpfEvent, *execDetails, error) {
 	var raw bpfExecEvent
 	if err := decodeExecEvent(data, &raw); err != nil {

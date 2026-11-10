@@ -59,10 +59,20 @@ static __always_inline int emit_named(__u32 op, __u64 uname, __u64 flags, int co
 
 #if defined(__TARGET_ARCH_x86)
 // 64-bit ABI: rdi, rsi, rdx ...; i386 ABI: ebx, ecx, edx ...
-#define A0_64(r) BPF_CORE_READ(r, di)
-#define A1_64(r) BPF_CORE_READ(r, si)
-#define A0_32(r) ((__u32)BPF_CORE_READ(r, bx))
-#define A1_32(r) ((__u32)BPF_CORE_READ(r, cx))
+// vmlinux.h comes from the build host (possibly arm64, whose pt_regs has no
+// di/si/bx/cx), so declare the x86 fields as a CO-RE flavor; they are
+// relocated against the x86 kernel's BTF at load time.
+struct pt_regs___aurora_x86 {
+	unsigned long bx;
+	unsigned long cx;
+	unsigned long si;
+	unsigned long di;
+} __attribute__((preserve_access_index));
+#define X86(r) ((const struct pt_regs___aurora_x86 *)(r))
+#define A0_64(r) BPF_CORE_READ(X86(r), di)
+#define A1_64(r) BPF_CORE_READ(X86(r), si)
+#define A0_32(r) ((__u32)BPF_CORE_READ(X86(r), bx))
+#define A1_32(r) ((__u32)BPF_CORE_READ(X86(r), cx))
 
 SEC("fentry/__x64_sys_sysinfo")
 int BPF_PROG(sc_sysinfo64, const struct pt_regs *regs) { return emit_sysinfo(0); }
@@ -86,7 +96,7 @@ int BPF_PROG(sc_delmod32, const struct pt_regs *regs) { return emit_named(HOP_DE
 
 #elif defined(__TARGET_ARCH_arm64)
 // AArch64 and AArch32 (compat) both pass arguments in regs[0..]. vmlinux.h
-// comes from the build host (x86), so declare the arm64 layout as a CO-RE
+// comes from the build host (maybe x86), so declare the arm64 layout as a CO-RE
 // flavor; it is relocated against the arm64 kernel's BTF at load time.
 struct pt_regs___aurora_arm64 {
 	__u64 regs[31];

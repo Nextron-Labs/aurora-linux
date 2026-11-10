@@ -190,8 +190,6 @@ type auditProc struct {
 	compat               bool // 32-bit (compat) syscall entry
 }
 
-func auditArch() string { return auditArchFor(false) }
-
 // auditArchFor returns auditd's arch value (AUDIT_ARCH_*) for the native or
 // the 32-bit compat ABI.
 func auditArchFor(compat bool) string {
