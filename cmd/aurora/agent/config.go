@@ -33,6 +33,11 @@ type yamlConfig struct {
 	StatsInterval        *int     `yaml:"stats-interval"`
 	SigmaNoCollapseWS    *bool    `yaml:"sigma-no-collapse-ws"`
 	PprofListen          *string  `yaml:"pprof-listen"`
+	AuditMode            *string  `yaml:"audit-mode"`
+	StrictRules          *bool    `yaml:"strict-rules"`
+	TamperProtection     *string  `yaml:"tamper-protection"`
+	SyslogFiles          []string `yaml:"syslog-log"`
+	SyslogJournal        *bool    `yaml:"syslog-journal"`
 }
 
 // ApplyConfigFile loads YAML configuration from path and applies only fields
@@ -116,6 +121,21 @@ func ApplyConfigFile(path string, params *Parameters) error {
 	}
 	if cfg.Verbose != nil {
 		params.Verbose = *cfg.Verbose
+	}
+	if cfg.SyslogFiles != nil {
+		params.SyslogFiles = append([]string(nil), cfg.SyslogFiles...)
+	}
+	if cfg.SyslogJournal != nil {
+		params.SyslogJournal = *cfg.SyslogJournal
+	}
+	if cfg.TamperProtection != nil {
+		params.TamperProtection = strings.TrimSpace(*cfg.TamperProtection)
+	}
+	if cfg.StrictRules != nil {
+		params.StrictRules = *cfg.StrictRules
+	}
+	if cfg.AuditMode != nil {
+		params.AuditMode = strings.TrimSpace(*cfg.AuditMode)
 	}
 	if cfg.StatsInterval != nil {
 		params.StatsInterval = *cfg.StatsInterval

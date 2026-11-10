@@ -793,19 +793,19 @@ func TestLoadC2IOCsRejectsMalformedEntries(t *testing.T) {
 	path := filepath.Join(tmpDir, "c2.txt")
 	content := strings.Join([]string{
 		"# Malformed entries that must be rejected",
-		"evildomain.com:65",        // colon instead of semicolon
-		"bad:domain.com",           // colon in FQDN
-		"192.168.1.1:8080",         // IP with port (colon)
-		"evil domain.com",          // space in domain
-		"not_a_domain",             // no dot, underscore
-		";95",                      // empty indicator with score
-		"evil.com;abc",             // non-numeric score — treated as full indicator, rejected by isLikelyDomain
-		"",                         // empty line (skipped)
+		"evildomain.com:65", // colon instead of semicolon
+		"bad:domain.com",    // colon in FQDN
+		"192.168.1.1:8080",  // IP with port (colon)
+		"evil domain.com",   // space in domain
+		"not_a_domain",      // no dot, underscore
+		";95",               // empty indicator with score
+		"evil.com;abc",      // non-numeric score — treated as full indicator, rejected by isLikelyDomain
+		"",                  // empty line (skipped)
 		"# Valid entries that must be accepted",
-		"legit.evil.com;75",        // valid domain with score
-		"clean-c2.example.org",     // valid domain without score
-		"10.20.30.40;60",           // valid IP with score
-		"172.16.0.1",               // valid IP without score
+		"legit.evil.com;75",    // valid domain with score
+		"clean-c2.example.org", // valid domain without score
+		"10.20.30.40;60",       // valid IP with score
+		"172.16.0.1",           // valid IP without score
 	}, "\n") + "\n"
 	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
@@ -922,7 +922,7 @@ func TestLoadFilenameIOCsRejectsMalformedEntries(t *testing.T) {
 		`ok\.dll;75;(unclosed`,
 		"# this is a comment line",
 		``,
-		`(?i)\\legit\.exe;80`,      // valid entry
+		`(?i)\\legit\.exe;80`,                // valid entry
 		`(?i)\\tool\.exe;60;(?i)\\Windows\\`, // valid three-field
 	}, "\n") + "\n"
 	if err := os.WriteFile(path, []byte(content), 0600); err != nil {

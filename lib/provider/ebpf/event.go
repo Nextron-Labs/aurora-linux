@@ -60,3 +60,12 @@ func (e *ebpfEvent) ForEach(fn func(key string, value string)) {
 func (e *ebpfEvent) Fields() enrichment.DataFieldsMap {
 	return e.fields
 }
+
+// Services returns the Sigma logsource services this event belongs to: the
+// auditd-compatible records feed the linux/auditd rules.
+func (e *ebpfEvent) Services() []string {
+	if e.source == SourceAudit {
+		return []string{"auditd"}
+	}
+	return nil
+}

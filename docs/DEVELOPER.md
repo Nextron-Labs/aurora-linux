@@ -390,10 +390,122 @@ Linux test run.
 
 - BPF stack is 512 bytes. Capturing variable-length argv requires
   multiple `bpf_probe_read_user()` calls and truncation is inevitable.
-- `/proc/PID/cmdline` is the canonical, complete source.
+- `/proc/PID/cmdline` is the canonical, complete source. (Exception: the
+  first 4 KiB of argv is now also captured in-kernel at exec time, so
+  short-lived processes are not lost to the /proc race and the auditd
+  `EXECVE` records are reliable; /proc remains the fallback.)
 - Keeping BPF programs small reduces verifier complexity.
 - The BPF program captures only what's needed to **identify** the event
   (pid, ppid, uid, filename). Richer fields are reconstructed in userland.
+
+### Event ID 200: auditd-compatible records (`--audit-mode ebpf`)
+
+`lib/provider/ebpf/audit*.go` plus `bpf/audit_monitor.c` and the argv capture
+in `bpf/exec_monitor.c` replace the auditd rules that the SigmaHQ
+`linux/auditd` rules document as prerequisites. Records carry raw auditd fields
+(`type`, `SYSCALL`, `exe`, `comm`, `key`, `a0..aN`, `name`, `nametype`, ...).
+
+- `audit_monitor.c`: one tracepoint per syscall (`sys_enter_*`), one shared
+  ring buffer, op codes mirrored in `audit.go` (`auditOp*`). Tracepoints that
+  do not exist on the running kernel/arch are skipped at attach time.
+- Path syscalls are pre-filtered by the `watch_prefixes` LPM trie, populated
+  from `audit_watch.go`; user space then applies the precise glob + `-p`
+  permission match. **Adding a watched path = add a `watchRule`.**
+- `audit_rules_test.go` replays synthetic activity through the real Sigma
+  auditd rules (`AURORA_SIGMA_AUDITD_RULES`, default `~/sigma/rules/linux/auditd`)
+  and requires every rule to fire. Extend it when new rules appear upstream.
+
+Kernel gotcha: recent kernels refuse to attach a syscall tracepoint program that
+reads `ctx->args[k]` beyond the syscall's real argument count (EACCES on
+attach), so `begin()` takes the argument count per syscall. cilium/ebpf >= 0.22
+is also required for the BTF layout of 7.x kernels.
+
+### Syslog input and logsource routing (Event ID 300)
+
+`lib/provider/syslog` (optional) emits `message/program/pid/hostname/...`
+events. Events may implement `sigma.ServiceProvider` (`Services() []string`);
+the consumer evaluates a rule that names a logsource `service` only against
+events listing it (audit records: `auditd`; syslog lines: `syslog` plus
+per-program services such as `sshd`). Rules without a service see every event.
+`Config.LogsourceServices` tells the consumer which services are collected;
+rules for others are excluded at startup.
+
+### Vendored Sigma engine (`third_party/go-sigma-rule-engine`, an in-repo package: no `replace` directive needed)
+
+Upstream v0.3.0 plus Aurora patches: per-rule skip reasons (`Ruleset.Skipped`),
+`Tree.CanMatch/Fields` (rule coverage), keyword `|all` maps, integer keywords,
+`selection_*` keyword lists, `---` only counts as a document separator at line
+start, case-insensitive equality/prefix/suffix, and fast matchers
+(`ContainsPattern`, `StarPattern`) replacing the glob engine for wildcard-free
+and `*`-only patterns. Any new `StringMatcher` type must also be listed in
+`optimizeStringMatchers`, otherwise `Optimize()` silently drops it.
+Benchmark: `go test ./lib/provider/ebpf -run xxx -bench SigmaHandle`.
+
+### Security-hook file/network monitor (`bpf/audit_hooks.c`, `audit_hooks.go`, `watch_registry.go`)
+
+fentry programs on `security_file_open`, `security_path_*`, `security_inode_setattr`,
+`security_file_truncate`, `security_socket_connect`, `security_syslog` and the
+module-load hooks. Matching is by inode (`watch_inodes`, keyed by
+`(i_ino, sb->s_dev)`; userland takes the device from `/proc/self/mountinfo`
+because `stat`'s `st_dev` differs on btrfs subvolumes) plus leaf names
+(`watch_names`) for writes/creations in other mount namespaces. Paths are
+resolved in-kernel (`bpf/aurora_path.h`, `bpf_loop`) only on hits.
+`hookCoverage` in `listener_audit.go` decides, per hook that attached, which
+tracepoint programs of `audit_monitor.c` are skipped (per-operation fallback).
+
+Variants and fallbacks (see the README's kernel support matrix):
+- `audit_hooks.c` / `tamper_hooks.c` are built twice: default (path walk via
+  `bpf_loop`, 5.17+) and `-DAURORA_LEGACY` (`auditHooksLegacy`,
+  `tamperHooksLegacy`: 8 unrolled path steps, partial paths flagged with
+  `HOOK_F_PATH*_PARTIAL`). `loadHookCollection` tries the default first.
+  Force the legacy build on a new kernel with `AURORA_BPF_LEGACY=1` (testing).
+- `syscall_hooks.c` covers sysinfo/personality/memfd_create/delete_module on
+  the per-ABI entry points (native + compat). It is built per architecture
+  (`-target amd64,arm64`) and shares `hook_events`/`self_pids` with
+  `audit_hooks.c` through `MapReplacements`. `aurora_hooks.h` holds the shared
+  event layout.
+- `self_exec_id` was u32 before 5.9: read it with `bpf_core_field_size`.
+
+Gotchas learned the hard way:
+- `BPF_CORE_READ(c->field, ...)` where `c` is a local struct roots the CO-RE
+  relocation at that local type and gets poisoned (`0xbad2310`): copy the
+  pointer into a local variable first.
+- Variable sizes for `bpf_probe_read_*`: `barrier_var(x)` then `x &= MASK`
+  (the AND must be the last operation the verifier sees).
+- Avoid big bounded loops: verification time explodes (the first version took
+  50 s and hit 1M instructions); use `bpf_loop` callbacks.
+- `security_inode_setattr` gained an idmap/userns first argument in 5.12.
+
+### Process identity
+
+Audit events carry the task start time (`start_boottime`). `identity.go` caches
+exe/auid per pid at exec time and validates any `/proc` fallback against
+`/proc/PID/stat` starttime, so exited or pid-reused processes are never
+misattributed.
+
+### Anti-tamper (`tamper*.go`, `bpf/tamper_{hooks,monitor,lsm}.c`, `bpf/whoami.c`, `agent/tamper.go`)
+
+- `whoami.c`: learns Aurora's pid as the kernel sees it (pid namespaces);
+  every self-exclusion/protection map is keyed by it.
+- `tamper_hooks.c`: detection on security hooks (`task_kill`,
+  `file_send_sigiotask`, `ptrace_access_check`, `task_setnice/scheduler/ioprio`,
+  `bpf`, `bpf_map`, `bpf_prog`, `file_open` for control files). Fatal signals
+  are also written to the pinned `aurora_last_fatal` map so the next instance
+  can name the killer. `tamper_monitor.c` (tracepoints) is the fallback.
+- `tamper_lsm.c`: BPF-LSM deny hooks, loaded only in `enforce` mode and only
+  if BPF-LSM is active; trusted actors are Aurora, pid 1 and the target's
+  real parent. Object protection is scoped to Aurora's own program/map/link
+  IDs (`ProtectObjects`).
+- `tamper_scan.go`: periodic inventory of foreign programs; helper calls are
+  matched by helper ID and by `/proc/kallsyms` address offset (kernels dump
+  helper calls as `fn - __bpf_call_base`).
+- `tamper_canary.go`: the agent re-execs itself with `__aurora_canary__` as a
+  probe; `Observe()` must see every event first and claims canary events.
+- Live test: `AURORA_LIVE_TAMPER_TEST=1 go test ./lib/provider/ebpf -run TestLiveTamper -v`
+  as root (needs BPF-LSM and bpftool; enforcement ends when the test closes
+  the sensor). Add `AURORA_BPF_LEGACY=1` to exercise the pre-5.17 build.
+- Never test the canary by re-executing the Go test binary: it re-runs the
+  whole suite recursively.
 
 ### Why BPF ring buffer and not perf buffer?
 

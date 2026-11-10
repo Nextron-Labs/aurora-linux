@@ -14,8 +14,17 @@ ExecStart=/bin/bash -c 'exec /opt/aurora-linux/aurora \
     --logfile "$AURORA_LOG_FILE" \
     $AURORA_OUTPUT_FLAG \
     $AURORA_EXTRA_ARGS'
-Restart=on-failure
-RestartSec=5
+# Anti-tamper: always come back (also after SIGKILL or after the canary found a
+# blinded eBPF source), make Aurora the OOM killer's last choice (not -1000: with MemoryMax that can hang it), and keep the
+# "running" marker that reveals an unclean previous exit across restarts.
+Restart=always
+RestartSec=1
+OOMScoreAdjust=-900
+RuntimeDirectory=aurora-linux
+RuntimeDirectoryPreserve=restart
+LimitCORE=0
+# Uncomment to also refuse `systemctl stop` (stop then needs a unit override):
+#RefuseManualStop=yes
 
 # Privileges
 User=root

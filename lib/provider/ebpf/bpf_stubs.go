@@ -36,7 +36,9 @@ type fileMonitorObjects struct {
 	TraceSysExitOpenat  *ciliumebpf.Program
 	FileEvents          *ciliumebpf.Map
 	FileLostEvents      *ciliumebpf.Map
+	OpenatArgs          *ciliumebpf.Map
 	SelfPids            *ciliumebpf.Map
+	WatchedDirs         *ciliumebpf.Map
 }
 
 func (o *fileMonitorObjects) Close() error { return nil }
@@ -63,6 +65,7 @@ func loadNetMonitorObjects(objs *netMonitorObjects, opts *ciliumebpf.CollectionO
 type bpfMonitorObjects struct {
 	TraceSysEnterBpf *ciliumebpf.Program
 	TraceSysExitBpf  *ciliumebpf.Program
+	BpfArgs          *ciliumebpf.Map
 	BpfEvents        *ciliumebpf.Map
 	BpfLostEvents    *ciliumebpf.Map
 	SelfPids         *ciliumebpf.Map
@@ -72,4 +75,47 @@ func (o *bpfMonitorObjects) Close() error { return nil }
 
 func loadBpfMonitorObjects(objs *bpfMonitorObjects, opts *ciliumebpf.CollectionOptions) error {
 	return fmt.Errorf("BPF programs are only available on Linux; run go generate on a Linux host")
+}
+
+// loadAuditMonitor returns the audit monitor collection spec.
+func loadAuditMonitor() (*ciliumebpf.CollectionSpec, error) {
+	return nil, fmt.Errorf("BPF programs are only available on Linux; run go generate on a Linux host")
+}
+
+// loadTamperMonitor returns the tamper detection collection spec.
+func loadTamperMonitor() (*ciliumebpf.CollectionSpec, error) {
+	return nil, fmt.Errorf("BPF programs are only available on Linux; run go generate on a Linux host")
+}
+
+// loadTamperLsm returns the tamper enforcement (BPF-LSM) collection spec.
+func loadTamperLsm() (*ciliumebpf.CollectionSpec, error) {
+	return nil, fmt.Errorf("BPF programs are only available on Linux; run go generate on a Linux host")
+}
+
+func loadAuditHooks() (*ciliumebpf.CollectionSpec, error) {
+	return nil, fmt.Errorf("BPF programs are only available on Linux; run go generate on a Linux host")
+}
+
+func loadTamperHooks() (*ciliumebpf.CollectionSpec, error) {
+	return nil, fmt.Errorf("BPF programs are only available on Linux; run go generate on a Linux host")
+}
+
+func loadWhoami() (*ciliumebpf.CollectionSpec, error) {
+	return nil, fmt.Errorf("BPF programs are only available on Linux; run go generate on a Linux host")
+}
+
+func loadExecExe() (*ciliumebpf.CollectionSpec, error) {
+	return nil, fmt.Errorf("BPF programs are only available on Linux; run go generate on a Linux host")
+}
+
+func loadAuditHooksLegacy() (*ciliumebpf.CollectionSpec, error) {
+	return nil, fmt.Errorf("BPF programs are only available on Linux; run go generate on a Linux host")
+}
+
+func loadTamperHooksLegacy() (*ciliumebpf.CollectionSpec, error) {
+	return nil, fmt.Errorf("BPF programs are only available on Linux; run go generate on a Linux host")
+}
+
+func loadSyscallHooks() (*ciliumebpf.CollectionSpec, error) {
+	return nil, fmt.Errorf("BPF programs are only available on Linux; run go generate on a Linux host")
 }

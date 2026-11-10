@@ -2,7 +2,6 @@ package ebpf
 
 import (
 	"bytes"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -10,11 +9,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Nextron-Labs/aurora-linux/lib/enrichment"
+	"github.com/Nextron-Labs/aurora-linux/lib/provider"
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
-	"github.com/Nextron-Labs/aurora-linux/lib/enrichment"
-	"github.com/Nextron-Labs/aurora-linux/lib/provider"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -24,6 +23,7 @@ const (
 	SourceFileCreate  = "LinuxEBPF:FileCreate"
 	SourceNetConnect  = "LinuxEBPF:NetConnect"
 	SourceBpfEvent    = "LinuxEBPF:BpfEvent"
+	// SourceAudit (see audit.go) emits auditd-compatible records.
 
 	readErrorBackoff = 100 * time.Millisecond
 )
@@ -35,6 +35,9 @@ type Listener struct {
 	enableFile bool
 	enableNet  bool
 	enableBpf  bool
+	// enableAudit emits auditd-compatible SYSCALL/EXECVE/PATH records so the
+	// SigmaHQ linux/auditd rules work without auditd.
+	enableAudit bool
 
 	// eBPF objects and links
 	execObjs  *execMonitorObjects
@@ -48,13 +51,41 @@ type Listener struct {
 	bpfEnter  link.Link
 	bpfExit   link.Link
 
+	// Audit emulation: one collection, many syscall tracepoints.
+	auditColl  *ebpf.Collection
+	auditLinks []link.Link
+	auditWatch *watchSet
+
+	// Optional in-kernel exe path resolver (exec_exe.c).
+	exeColl *ebpf.Collection
+	exeLink link.Link
+
+	// Security-hook monitor (preferred over the tracepoints when available).
+	hookColl     *ebpf.Collection
+	scColl       *ebpf.Collection // syscall_hooks.c (shares hookColl's ring)
+	hookLinks    []link.Link
+	hookRd       *ringbuf.Reader
+	registry     *watchRegistry
+	registryStop chan struct{}
+	wgRegistry   sync.WaitGroup
+
 	// Ring buffer readers
 	execReader *ringbuf.Reader
 	fileReader *ringbuf.Reader
 	netReader  *ringbuf.Reader
 	bpfReader  *ringbuf.Reader
+	auditRd    *ringbuf.Reader
+
+	// sysinfoViaHook: sysinfo records come from syscall_hooks.c (hook
+	// ring), not audit_monitor.c.
+	sysinfoViaHook bool
+
+	// Per-reader progress for the tamper canary (progress.go).
+	prog     map[string]*readerProgress
+	progOnce sync.Once
 
 	// Correlation and caches
+	idents     *identityCache
 	correlator *enrichment.Correlator
 	userCache  *UserCache
 
@@ -65,18 +96,24 @@ type Listener struct {
 	selfPID   uint32
 
 	// Optional init hooks for tests.
-	initExecFn func() error
-	initFileFn func() error
-	initNetFn  func() error
-	initBpfFn  func() error
+	initExecFn  func() error
+	initFileFn  func() error
+	initNetFn   func() error
+	initBpfFn   func() error
+	initAuditFn func() error
 }
 
 // NewListener creates a new eBPF listener with the given correlator.
 func NewListener(correlator *enrichment.Correlator) *Listener {
 	return &Listener{
 		correlator: correlator,
+		idents:     newIdentityCache(16384),
 	}
 }
+
+// SetHostPID sets Aurora's pid as the kernel sees it (see DiscoverHostPID);
+// BPF self-exclusion uses it. Must be called before Initialize.
+func (l *Listener) SetHostPID(pid uint32) { l.selfPID = pid }
 
 func (l *Listener) Name() string        { return ProviderName }
 func (l *Listener) Description() string { return "eBPF-based telemetry provider for Linux" }
@@ -92,6 +129,8 @@ func (l *Listener) AddSource(source string) error {
 		l.enableNet = true
 	case SourceBpfEvent:
 		l.enableBpf = true
+	case SourceAudit:
+		l.enableAudit = true
 	default:
 		return fmt.Errorf("unknown source: %s", source)
 	}
@@ -102,11 +141,13 @@ func (l *Listener) AddSource(source string) error {
 func (l *Listener) Initialize() error {
 	// Compute boot time for ktime_get_ns → wall clock conversion
 	l.bootNanos = bootTimeNanos()
-	selfPID := os.Getpid()
-	if selfPID <= 0 {
-		return fmt.Errorf("invalid process id: %d", selfPID)
+	if l.selfPID == 0 {
+		selfPID := os.Getpid()
+		if selfPID <= 0 {
+			return fmt.Errorf("invalid process id: %d", selfPID)
+		}
+		l.selfPID = uint32(selfPID)
 	}
-	l.selfPID = uint32(selfPID)
 
 	// Initialize user cache
 	uc, err := NewUserCache(256)
@@ -123,6 +164,9 @@ func (l *Listener) Initialize() error {
 
 	if l.enableExec {
 		requested++
+		if l.initExecFn == nil {
+			l.initExecExe()
+		}
 		if err := l.initExecSource(); err != nil {
 			l.enableExec = false
 			initErrs = append(initErrs, fmt.Errorf("exec monitor: %w", err))
@@ -162,6 +206,17 @@ func (l *Listener) Initialize() error {
 		}
 	}
 
+	if l.enableAudit {
+		requested++
+		if err := l.initAuditSource(); err != nil {
+			l.enableAudit = false
+			initErrs = append(initErrs, fmt.Errorf("audit monitor: %w", err))
+			log.WithError(err).Warn("Failed to initialize audit monitor; auditd-compatible events limited to exec records")
+		} else {
+			initialized++
+		}
+	}
+
 	if requested > 0 && initialized == 0 {
 		return fmt.Errorf("failed to initialize any eBPF monitor: %w", errors.Join(initErrs...))
 	}
@@ -195,6 +250,13 @@ func (l *Listener) initNetSource() error {
 		return l.initNetFn()
 	}
 	return l.initNet()
+}
+
+func (l *Listener) initAuditSource() error {
+	if l.initAuditFn != nil {
+		return l.initAuditFn()
+	}
+	return l.initAudit()
 }
 
 func (l *Listener) initBpfSource() error {
@@ -362,6 +424,13 @@ func (l *Listener) registerSelfPID(m *ebpf.Map, source string) error {
 // SendEvents starts reading events from all enabled ring buffers and calls
 // the callback for each parsed event. This method blocks until Close() is called.
 func (l *Listener) SendEvents(callback func(event provider.Event)) {
+	// Ring fill levels for the canary's backlog check (progress.go).
+	for name, rd := range map[string]*ringbuf.Reader{progExec: l.execReader, progFile: l.fileReader,
+		progNet: l.netReader, progBpf: l.bpfReader, progAudit: l.auditRd, progHook: l.hookRd} {
+		if rd != nil {
+			l.progress(name).setRing(rd.AvailableBytes)
+		}
+	}
 	if l.enableExec && l.execReader != nil {
 		l.wg.Add(1)
 		go l.readExecEvents(callback)
@@ -378,6 +447,14 @@ func (l *Listener) SendEvents(callback func(event provider.Event)) {
 		l.wg.Add(1)
 		go l.readBpfEvents(callback)
 	}
+	if l.enableAudit && l.auditRd != nil {
+		l.wg.Add(1)
+		go l.readAuditEvents(callback)
+	}
+	if l.enableAudit && l.hookRd != nil {
+		l.wg.Add(1)
+		go l.readHookEvents(callback)
+	}
 
 	l.wg.Wait()
 }
@@ -387,8 +464,11 @@ func (l *Listener) readExecEvents(callback func(event provider.Event)) {
 	defer l.wg.Done()
 
 	var record ringbuf.Record
+	pg := l.progress(progExec)
 	for {
+		pg.beginRead()
 		err := l.execReader.ReadInto(&record)
+		pg.endRead()
 		if err != nil {
 			if errors.Is(err, ringbuf.ErrClosed) {
 				return
@@ -401,13 +481,20 @@ func (l *Listener) readExecEvents(callback func(event provider.Event)) {
 			continue
 		}
 
-		evt, err := l.parseExecEvent(record.RawSample)
+		evt, details, err := l.parseExecEventDetails(record.RawSample)
 		if err != nil {
 			log.WithError(err).Debug("Parsing exec event")
 			continue
 		}
 
 		callback(evt)
+
+		if l.enableAudit && details != nil {
+			for _, ae := range l.auditEventsForExec(details, evt.ts) {
+				callback(ae)
+			}
+		}
+		pg.processed(evt.ts)
 	}
 }
 
@@ -416,8 +503,11 @@ func (l *Listener) readFileEvents(callback func(event provider.Event)) {
 	defer l.wg.Done()
 
 	var record ringbuf.Record
+	pg := l.progress(progFile)
 	for {
+		pg.beginRead()
 		err := l.fileReader.ReadInto(&record)
+		pg.endRead()
 		if err != nil {
 			if errors.Is(err, ringbuf.ErrClosed) {
 				return
@@ -437,6 +527,7 @@ func (l *Listener) readFileEvents(callback func(event provider.Event)) {
 		}
 
 		callback(evt)
+		pg.processed(evt.ts)
 	}
 }
 
@@ -445,8 +536,11 @@ func (l *Listener) readNetEvents(callback func(event provider.Event)) {
 	defer l.wg.Done()
 
 	var record ringbuf.Record
+	pg := l.progress(progNet)
 	for {
+		pg.beginRead()
 		err := l.netReader.ReadInto(&record)
+		pg.endRead()
 		if err != nil {
 			if errors.Is(err, ringbuf.ErrClosed) {
 				return
@@ -466,6 +560,7 @@ func (l *Listener) readNetEvents(callback func(event provider.Event)) {
 		}
 
 		callback(evt)
+		pg.processed(evt.ts)
 	}
 }
 
@@ -474,8 +569,11 @@ func (l *Listener) readBpfEvents(callback func(event provider.Event)) {
 	defer l.wg.Done()
 
 	var record ringbuf.Record
+	pg := l.progress(progBpf)
 	for {
+		pg.beginRead()
 		err := l.bpfReader.ReadInto(&record)
+		pg.endRead()
 		if err != nil {
 			if errors.Is(err, ringbuf.ErrClosed) {
 				return
@@ -495,6 +593,7 @@ func (l *Listener) readBpfEvents(callback func(event provider.Event)) {
 		}
 
 		callback(evt)
+		pg.processed(evt.ts)
 	}
 }
 
@@ -509,6 +608,12 @@ type bpfExecEvent struct {
 	Comm        [16]byte
 	Filename    [256]byte
 	FilenameLen uint32
+	Euid        uint32
+	Egid        uint32
+	ArgsLen     uint32
+	StartNs     uint64
+	ExecID      uint64
+	Args        [auditArgsMax]byte
 }
 
 type bpfFileEvent struct {
@@ -544,30 +649,68 @@ type bpfBpfEvent struct {
 	ProgName    [16]byte
 }
 
-// parseExecEvent parses a raw exec event from the ring buffer and reconstructs
-// all fields from /proc.
-func (l *Listener) parseExecEvent(data []byte) (*ebpfEvent, error) {
+// execDetails carries data of a parsed exec event that the auditd-compatible
+// record builder needs on top of the process_creation fields.
+type execDetails struct {
+	raw      *bpfExecEvent
+	filename string
+	image    string
+	cwd      string
+	loginUID string
+	argv     []string
+}
+
+// parseExecEventDetails parses a raw exec event from the ring buffer and
+// returns it with the details needed to derive auditd-compatible records.
+func (l *Listener) parseExecEventDetails(data []byte) (*ebpfEvent, *execDetails, error) {
 	var raw bpfExecEvent
-	if err := binary.Read(bytes.NewReader(data), binary.LittleEndian, &raw); err != nil {
-		return nil, fmt.Errorf("decoding exec event: %w", err)
+	if err := decodeExecEvent(data, &raw); err != nil {
+		return nil, nil, err
 	}
 
 	pid := raw.Pid
 	ppid := raw.Ppid
 	uid := raw.Uid
 
-	// Resolve Image from /proc/PID/exe, fallback to BPF filename
-	bpfFilename := nullTermStr(raw.Filename[:], int(raw.FilenameLen))
-	image, err := readExeLink(pid)
-	if err != nil {
-		image = bpfFilename
+	// Image: canonical path of the new image resolved in-kernel (immune to the
+	// process exiting or being replaced before userland looks); /proc and the
+	// exec'd name are fallbacks for kernels where the walk failed.
+	bpfFilename := boundedStr(raw.Filename[:], raw.FilenameLen)
+	image := l.kernelExePath(pid, raw.ExecID)
+	if image == "" {
+		var err error
+		if image, err = readExeLink(pid); err != nil {
+			image = bpfFilename
+		}
 	}
 
-	// Read command line
+	// Command line: prefer the argv block captured in-kernel (immune to the
+	// process exiting before userland looks), fall back to /proc.
 	var cmdline string
 	var truncated bool
-	cmdBytes, err := readCmdline(pid)
-	if err == nil {
+	var argv []string
+	if raw.ArgsLen > 0 {
+		n := int(raw.ArgsLen)
+		if n > len(raw.Args) {
+			n = len(raw.Args)
+		}
+		block := raw.Args[:n]
+		if n >= auditArgsMax {
+			// The in-kernel capture is bounded: padding the argv beyond it
+			// must not hide the real command. Take the full command line
+			// from /proc if it still belongs to the same process.
+			if full, ok := readCmdlineIfSame(pid, raw.StartNs); ok && len(full) > n {
+				block = full
+			}
+		}
+		argv = splitArgv(block)
+		cmdline, truncated = joinCmdline(block)
+		if len(block) >= auditArgsMax && len(block) == n {
+			truncated = true
+			cmdline += " ...(truncated)"
+		}
+	} else if cmdBytes, err := readCmdline(pid); err == nil {
+		argv = splitArgv(cmdBytes)
 		cmdline, truncated = joinCmdline(cmdBytes)
 	}
 
@@ -615,7 +758,7 @@ func (l *Listener) parseExecEvent(data []byte) (*ebpfEvent, error) {
 		})
 	}
 
-	return &ebpfEvent{
+	evt := &ebpfEvent{
 		id: provider.EventIdentifier{
 			ProviderName: ProviderName,
 			EventID:      EventIDProcessCreation,
@@ -624,14 +767,23 @@ func (l *Listener) parseExecEvent(data []byte) (*ebpfEvent, error) {
 		source: SourceProcessExec,
 		ts:     l.ktimeToWall(raw.TimestampNs),
 		fields: fields,
-	}, nil
+	}
+	details := &execDetails{
+		raw:      &raw,
+		filename: bpfFilename,
+		image:    image,
+		cwd:      cwd,
+		loginUID: loginUID,
+		argv:     argv,
+	}
+	return evt, details, nil
 }
 
 // parseFileEvent parses a raw file event and reconstructs fields.
 func (l *Listener) parseFileEvent(data []byte) (*ebpfEvent, error) {
 	var raw bpfFileEvent
-	if err := binary.Read(bytes.NewReader(data), binary.LittleEndian, &raw); err != nil {
-		return nil, fmt.Errorf("decoding file event: %w", err)
+	if err := decodeFileEvent(data, &raw); err != nil {
+		return nil, err
 	}
 
 	pid := raw.Pid
@@ -642,12 +794,7 @@ func (l *Listener) parseFileEvent(data []byte) (*ebpfEvent, error) {
 	targetFilename := resolveFilename(pid, filename, raw.Dfd)
 
 	// Resolve Image
-	image, _ := readExeLink(pid)
-	if image == "" && l.correlator != nil {
-		if info := l.correlator.Lookup(pid); info != nil {
-			image = info.Image
-		}
-	}
+	image := l.processImage(pid)
 
 	username := l.userCache.Lookup(uid)
 
@@ -668,20 +815,15 @@ func (l *Listener) parseFileEvent(data []byte) (*ebpfEvent, error) {
 // parseNetEvent parses a raw network event and reconstructs fields.
 func (l *Listener) parseNetEvent(data []byte) (*ebpfEvent, error) {
 	var raw bpfNetEvent
-	if err := binary.Read(bytes.NewReader(data), binary.LittleEndian, &raw); err != nil {
-		return nil, fmt.Errorf("decoding net event: %w", err)
+	if err := decodeNetEvent(data, &raw); err != nil {
+		return nil, err
 	}
 
 	pid := raw.Pid
 	uid := raw.Uid
 
 	// Resolve Image
-	image, _ := readExeLink(pid)
-	if image == "" && l.correlator != nil {
-		if info := l.correlator.Lookup(pid); info != nil {
-			image = info.Image
-		}
-	}
+	image := l.processImage(pid)
 
 	username := l.userCache.Lookup(uid)
 
@@ -719,20 +861,15 @@ func (l *Listener) parseNetEvent(data []byte) (*ebpfEvent, error) {
 // parseBpfEvent parses a raw bpf syscall event and reconstructs fields.
 func (l *Listener) parseBpfEvent(data []byte) (*ebpfEvent, error) {
 	var raw bpfBpfEvent
-	if err := binary.Read(bytes.NewReader(data), binary.LittleEndian, &raw); err != nil {
-		return nil, fmt.Errorf("decoding bpf event: %w", err)
+	if err := decodeBpfEvent(data, &raw); err != nil {
+		return nil, err
 	}
 
 	pid := raw.Pid
 	uid := raw.Uid
 
 	// Resolve Image
-	image, _ := readExeLink(pid)
-	if image == "" && l.correlator != nil {
-		if info := l.correlator.Lookup(pid); info != nil {
-			image = info.Image
-		}
-	}
+	image := l.processImage(pid)
 
 	username := l.userCache.Lookup(uid)
 
@@ -770,6 +907,12 @@ func (l *Listener) LostEvents() uint64 {
 	if l.bpfObjs != nil {
 		total += readLostCounter(l.bpfObjs.BpfLostEvents)
 	}
+	if l.auditColl != nil {
+		total += readLostCounter(l.auditColl.Maps["audit_lost_events"])
+	}
+	if l.hookColl != nil {
+		total += readLostCounter(l.hookColl.Maps["hook_lost_events"])
+	}
 
 	return total
 }
@@ -804,7 +947,35 @@ func (l *Listener) Close() error {
 		}
 	}
 
+	if l.auditRd != nil {
+		if err := l.auditRd.Close(); err != nil {
+			closeErrs = append(closeErrs, fmt.Errorf("closing audit reader: %w", err))
+		}
+	}
+	if l.hookRd != nil {
+		if err := l.hookRd.Close(); err != nil {
+			closeErrs = append(closeErrs, fmt.Errorf("closing hook reader: %w", err))
+		}
+	}
+	if l.registryStop != nil {
+		close(l.registryStop)
+		l.wgRegistry.Wait()
+		l.registryStop = nil
+	}
+	for _, lnk := range l.hookLinks {
+		if err := lnk.Close(); err != nil {
+			closeErrs = append(closeErrs, fmt.Errorf("closing hook link: %w", err))
+		}
+	}
+	l.hookLinks = nil
+
 	// Detach tracepoints
+	for _, lnk := range l.auditLinks {
+		if err := lnk.Close(); err != nil {
+			closeErrs = append(closeErrs, fmt.Errorf("closing audit link: %w", err))
+		}
+	}
+	l.auditLinks = nil
 	if l.execLink != nil {
 		if err := l.execLink.Close(); err != nil {
 			closeErrs = append(closeErrs, fmt.Errorf("closing exec link: %w", err))
@@ -837,6 +1008,21 @@ func (l *Listener) Close() error {
 	}
 
 	// Close BPF objects
+	if l.auditColl != nil {
+		l.auditColl.Close()
+	}
+	if l.scColl != nil {
+		l.scColl.Close()
+	}
+	if l.hookColl != nil {
+		l.hookColl.Close()
+	}
+	if l.exeLink != nil {
+		l.exeLink.Close()
+	}
+	if l.exeColl != nil {
+		l.exeColl.Close()
+	}
 	if l.execObjs != nil {
 		if err := l.execObjs.Close(); err != nil {
 			closeErrs = append(closeErrs, fmt.Errorf("closing exec objects: %w", err))

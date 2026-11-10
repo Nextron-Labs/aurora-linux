@@ -4,15 +4,15 @@ import (
 	"sort"
 	"testing"
 
-	sigmaengine "github.com/markuskont/go-sigma-rule-engine"
+	sigmaengine "github.com/Nextron-Labs/aurora-linux/third_party/go-sigma-rule-engine"
 )
 
 func TestParseFieldSelector(t *testing.T) {
 	tests := []struct {
-		name       string
-		input      string
-		wantField  string
-		wantMods   []string
+		name      string
+		input     string
+		wantField string
+		wantMods  []string
 	}{
 		{name: "simple_field", input: "Image", wantField: "Image", wantMods: nil},
 		{name: "endswith", input: "Image|endswith", wantField: "Image", wantMods: []string{"endswith"}},
@@ -49,8 +49,8 @@ func TestParseFieldSelector(t *testing.T) {
 func TestExtractDetectionFieldPatternsBasic(t *testing.T) {
 	detection := sigmaengine.Detection{
 		"selection": map[string]interface{}{
-			"Image|endswith":         "/whoami",
-			"CommandLine|contains":   " /all",
+			"Image|endswith":       "/whoami",
+			"CommandLine|contains": " /all",
 		},
 		"condition": "selection",
 	}
@@ -284,10 +284,10 @@ func TestUniqueStrings(t *testing.T) {
 
 func TestTextPatternFromModifiers(t *testing.T) {
 	tests := []struct {
-		name     string
-		mods     []string
-		wantMod  sigmaengine.TextPatternModifier
-		wantAll  bool
+		name    string
+		mods    []string
+		wantMod sigmaengine.TextPatternModifier
+		wantAll bool
 	}{
 		{name: "empty", mods: nil, wantMod: sigmaengine.TextPatternNone, wantAll: false},
 		{name: "contains", mods: []string{"contains"}, wantMod: sigmaengine.TextPatternContains, wantAll: false},
@@ -391,7 +391,7 @@ func TestRuleMetadataMatchingRulePatterns(t *testing.T) {
 	meta := ruleMetadata{
 		FieldPatterns: extractDetectionFieldPatterns(sigmaengine.Detection{
 			"selection": map[string]interface{}{
-				"Image|endswith": "/whoami",
+				"Image|endswith":       "/whoami",
 				"CommandLine|contains": " /all",
 			},
 			"condition": "selection",
