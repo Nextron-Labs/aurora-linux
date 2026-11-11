@@ -10,11 +10,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Nextron-Labs/aurora-linux/lib/enrichment"
+	"github.com/Nextron-Labs/aurora-linux/lib/provider"
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
-	"github.com/Nextron-Labs/aurora-linux/lib/enrichment"
-	"github.com/Nextron-Labs/aurora-linux/lib/provider"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -22,6 +22,7 @@ import (
 const (
 	SourceProcessExec = "LinuxEBPF:ProcessExec"
 	SourceFileCreate  = "LinuxEBPF:FileCreate"
+	SourceFileTime    = "LinuxEBPF:FileCreateTime"
 	SourceNetConnect  = "LinuxEBPF:NetConnect"
 	SourceBpfEvent    = "LinuxEBPF:BpfEvent"
 
@@ -33,17 +34,21 @@ type Listener struct {
 	// Which sources are enabled
 	enableExec bool
 	enableFile bool
+	enableTime bool
 	enableNet  bool
 	enableBpf  bool
 
 	// eBPF objects and links
 	execObjs  *execMonitorObjects
 	fileObjs  *fileMonitorObjects
+	timeObjs  *filetimeMonitorObjects
 	netObjs   *netMonitorObjects
 	bpfObjs   *bpfMonitorObjects
 	execLink  link.Link
 	fileEnter link.Link
 	fileExit  link.Link
+	timeEnter link.Link
+	timeExit  link.Link
 	netLink   link.Link
 	bpfEnter  link.Link
 	bpfExit   link.Link
@@ -51,6 +56,7 @@ type Listener struct {
 	// Ring buffer readers
 	execReader *ringbuf.Reader
 	fileReader *ringbuf.Reader
+	timeReader *ringbuf.Reader
 	netReader  *ringbuf.Reader
 	bpfReader  *ringbuf.Reader
 
@@ -67,6 +73,7 @@ type Listener struct {
 	// Optional init hooks for tests.
 	initExecFn func() error
 	initFileFn func() error
+	initTimeFn func() error
 	initNetFn  func() error
 	initBpfFn  func() error
 }
@@ -88,6 +95,8 @@ func (l *Listener) AddSource(source string) error {
 		l.enableExec = true
 	case SourceFileCreate:
 		l.enableFile = true
+	case SourceFileTime:
+		l.enableTime = true
 	case SourceNetConnect:
 		l.enableNet = true
 	case SourceBpfEvent:
@@ -141,6 +150,16 @@ func (l *Listener) Initialize() error {
 			initialized++
 		}
 	}
+	if l.enableTime {
+		requested++
+		if err := l.initTimeSource(); err != nil {
+			l.enableTime = false
+			initErrs = append(initErrs, fmt.Errorf("filetime monitor: %w", err))
+			log.WithError(err).Warn("Failed to initialize filetime monitor; source disabled")
+		} else {
+			initialized++
+		}
+	}
 	if l.enableNet {
 		requested++
 		if err := l.initNetSource(); err != nil {
@@ -188,6 +207,13 @@ func (l *Listener) initFileSource() error {
 		return l.initFileFn()
 	}
 	return l.initFile()
+}
+
+func (l *Listener) initTimeSource() error {
+	if l.initTimeFn != nil {
+		return l.initTimeFn()
+	}
+	return l.initTime()
 }
 
 func (l *Listener) initNetSource() error {
@@ -271,6 +297,46 @@ func (l *Listener) initFile() error {
 	l.fileEnter = enter
 	l.fileExit = exit
 	l.fileReader = rd
+
+	return nil
+}
+
+// initTime loads the file time monitor BPF program and attaches to utimensat enter/exit.
+func (l *Listener) initTime() error {
+	objs := &filetimeMonitorObjects{}
+	if err := loadFiletimeMonitorObjects(objs, nil); err != nil {
+		return classifyBPFError(err, "filetime_monitor")
+	}
+	if err := l.registerSelfPID(objs.SelfPids, "filetime"); err != nil {
+		objs.Close()
+		return err
+	}
+
+	enter, err := link.Tracepoint("syscalls", "sys_enter_utimensat", objs.TraceSysEnterUtimensat, nil)
+	if err != nil {
+		objs.Close()
+		return fmt.Errorf("attaching sys_enter_utimensat: %w", err)
+	}
+
+	exit, err := link.Tracepoint("syscalls", "sys_exit_utimensat", objs.TraceSysExitUtimensat, nil)
+	if err != nil {
+		enter.Close()
+		objs.Close()
+		return fmt.Errorf("attaching sys_exit_utimensat: %w", err)
+	}
+
+	rd, err := ringbuf.NewReader(objs.FiletimeEvents)
+	if err != nil {
+		exit.Close()
+		enter.Close()
+		objs.Close()
+		return fmt.Errorf("creating filetime ring buffer reader: %w", err)
+	}
+
+	l.timeObjs = objs
+	l.timeEnter = enter
+	l.timeExit = exit
+	l.timeReader = rd
 
 	return nil
 }
@@ -370,6 +436,10 @@ func (l *Listener) SendEvents(callback func(event provider.Event)) {
 		l.wg.Add(1)
 		go l.readFileEvents(callback)
 	}
+	if l.enableTime && l.timeReader != nil {
+		l.wg.Add(1)
+		go l.readTimeEvents(callback)
+	}
 	if l.enableNet && l.netReader != nil {
 		l.wg.Add(1)
 		go l.readNetEvents(callback)
@@ -433,6 +503,35 @@ func (l *Listener) readFileEvents(callback func(event provider.Event)) {
 		evt, err := l.parseFileEvent(record.RawSample)
 		if err != nil {
 			log.WithError(err).Debug("Parsing file event")
+			continue
+		}
+
+		callback(evt)
+	}
+}
+
+// readTimeEvents reads from the filetime ring buffer and processes events.
+func (l *Listener) readTimeEvents(callback func(event provider.Event)) {
+	defer l.wg.Done()
+
+	var record ringbuf.Record
+	for {
+		err := l.timeReader.ReadInto(&record)
+		if err != nil {
+			if errors.Is(err, ringbuf.ErrClosed) {
+				return
+			}
+			log.WithError(err).Error("Reading filetime ring buffer")
+			if l.closed.Load() {
+				return
+			}
+			time.Sleep(readErrorBackoff)
+			continue
+		}
+
+		evt, err := l.parseTimeEvent(record.RawSample)
+		if err != nil {
+			log.WithError(err).Debug("Parsing filetime event")
 			continue
 		}
 
@@ -519,6 +618,22 @@ type bpfFileEvent struct {
 	Flags       uint32
 	Filename    [256]byte
 	FilenameLen uint32
+}
+
+type bpfFiletimeEvent struct {
+	TimestampNs  uint64
+	Pid          uint32
+	Uid          uint32
+	Dfd          int32
+	Flags        int32
+	Filename     [256]byte
+	FilenameLen  uint32
+	NewAtimeSec  int64
+	NewAtimeNsec int64
+	NewMtimeSec  int64
+	NewMtimeNsec int64
+	TimesNull    uint8
+	Pad          [3]uint8
 }
 
 type bpfNetEvent struct {
@@ -665,6 +780,53 @@ func (l *Listener) parseFileEvent(data []byte) (*ebpfEvent, error) {
 	}, nil
 }
 
+// parseTimeEvent parses a raw filetime event and reconstructs fields.
+func (l *Listener) parseTimeEvent(data []byte) (*ebpfEvent, error) {
+	var raw bpfFiletimeEvent
+	if err := binary.Read(bytes.NewReader(data), binary.LittleEndian, &raw); err != nil {
+		return nil, fmt.Errorf("decoding filetime event: %w", err)
+	}
+
+	pid := raw.Pid
+	uid := raw.Uid
+	filename := nullTermStr(raw.Filename[:], int(raw.FilenameLen))
+	targetFilename := resolveFilename(pid, filename, raw.Dfd)
+
+	image, _ := readExeLink(pid)
+	if image == "" && l.correlator != nil {
+		if info := l.correlator.Lookup(pid); info != nil {
+			image = info.Image
+		}
+	}
+
+	username := l.userCache.Lookup(uid)
+
+	fields := buildFiletimeFieldsMap(
+		pid,
+		uid,
+		targetFilename,
+		image,
+		username,
+		raw.Flags,
+		raw.NewAtimeSec,
+		raw.NewAtimeNsec,
+		raw.NewMtimeSec,
+		raw.NewMtimeNsec,
+		raw.TimesNull == 1,
+	)
+
+	return &ebpfEvent{
+		id: provider.EventIdentifier{
+			ProviderName: ProviderName,
+			EventID:      EventIDFileCreateTime,
+		},
+		pid:    pid,
+		source: SourceFileTime,
+		ts:     l.ktimeToWall(raw.TimestampNs),
+		fields: fields,
+	}, nil
+}
+
 // parseNetEvent parses a raw network event and reconstructs fields.
 func (l *Listener) parseNetEvent(data []byte) (*ebpfEvent, error) {
 	var raw bpfNetEvent
@@ -764,6 +926,9 @@ func (l *Listener) LostEvents() uint64 {
 	if l.fileObjs != nil {
 		total += readLostCounter(l.fileObjs.FileLostEvents)
 	}
+	if l.timeObjs != nil {
+		total += readLostCounter(l.timeObjs.FiletimeLostEvents)
+	}
 	if l.netObjs != nil {
 		total += readLostCounter(l.netObjs.NetLostEvents)
 	}
@@ -793,6 +958,11 @@ func (l *Listener) Close() error {
 			closeErrs = append(closeErrs, fmt.Errorf("closing file reader: %w", err))
 		}
 	}
+	if l.timeReader != nil {
+		if err := l.timeReader.Close(); err != nil {
+			closeErrs = append(closeErrs, fmt.Errorf("closing filetime reader: %w", err))
+		}
+	}
 	if l.netReader != nil {
 		if err := l.netReader.Close(); err != nil {
 			closeErrs = append(closeErrs, fmt.Errorf("closing net reader: %w", err))
@@ -820,6 +990,16 @@ func (l *Listener) Close() error {
 			closeErrs = append(closeErrs, fmt.Errorf("closing file exit link: %w", err))
 		}
 	}
+	if l.timeEnter != nil {
+		if err := l.timeEnter.Close(); err != nil {
+			closeErrs = append(closeErrs, fmt.Errorf("closing filetime enter link: %w", err))
+		}
+	}
+	if l.timeExit != nil {
+		if err := l.timeExit.Close(); err != nil {
+			closeErrs = append(closeErrs, fmt.Errorf("closing filetime exit link: %w", err))
+		}
+	}
 	if l.netLink != nil {
 		if err := l.netLink.Close(); err != nil {
 			closeErrs = append(closeErrs, fmt.Errorf("closing net link: %w", err))
@@ -845,6 +1025,11 @@ func (l *Listener) Close() error {
 	if l.fileObjs != nil {
 		if err := l.fileObjs.Close(); err != nil {
 			closeErrs = append(closeErrs, fmt.Errorf("closing file objects: %w", err))
+		}
+	}
+	if l.timeObjs != nil {
+		if err := l.timeObjs.Close(); err != nil {
+			closeErrs = append(closeErrs, fmt.Errorf("closing filetime objects: %w", err))
 		}
 	}
 	if l.netObjs != nil {

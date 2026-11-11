@@ -224,6 +224,8 @@ func defaultSourceForEvent(providerName string, eventID uint16) string {
 	switch eventID {
 	case 1:
 		return "LinuxEBPF:ProcessExec"
+	case 2:
+		return "LinuxEBPF:FileCreateTime"
 	case 3:
 		return "LinuxEBPF:NetConnect"
 	case 11:

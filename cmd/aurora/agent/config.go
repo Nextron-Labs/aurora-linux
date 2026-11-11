@@ -11,6 +11,7 @@ import (
 
 type yamlConfig struct {
 	Rules                []string `yaml:"rules"`
+	AuditLogFiles        []string `yaml:"audit-log"`
 	FilenameIOCPath      *string  `yaml:"filename-iocs"`
 	C2IOCPath            *string  `yaml:"c2-iocs"`
 	LogFile              *string  `yaml:"logfile"`
@@ -59,6 +60,9 @@ func ApplyConfigFile(path string, params *Parameters) error {
 
 	if cfg.Rules != nil {
 		params.RuleDirs = append([]string(nil), cfg.Rules...)
+	}
+	if cfg.AuditLogFiles != nil {
+		params.AuditLogFiles = trimStringSlice(cfg.AuditLogFiles)
 	}
 	if cfg.FilenameIOCPath != nil {
 		params.FilenameIOCPath = strings.TrimSpace(*cfg.FilenameIOCPath)
@@ -128,4 +132,12 @@ func ApplyConfigFile(path string, params *Parameters) error {
 	}
 
 	return nil
+}
+
+func trimStringSlice(values []string) []string {
+	trimmed := make([]string, len(values))
+	for i, value := range values {
+		trimmed[i] = strings.TrimSpace(value)
+	}
+	return trimmed
 }

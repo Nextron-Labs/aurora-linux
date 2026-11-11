@@ -94,6 +94,52 @@ func TestValidateParametersAcceptsValidIOCPaths(t *testing.T) {
 	}
 }
 
+func TestValidateParametersRejectsInvalidAuditLogPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	params := DefaultParameters()
+	params.RuleDirs = []string{tmpDir}
+	params.AuditLogFiles = []string{filepath.Join(tmpDir, "missing-audit.log")}
+
+	err := ValidateParameters(params)
+	if err == nil {
+		t.Fatal("ValidateParameters() expected error for invalid --audit-log")
+	}
+	if !strings.Contains(err.Error(), "--audit-log") {
+		t.Fatalf("expected --audit-log context, got %v", err)
+	}
+}
+
+func TestValidateParametersRejectsAuditLogDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+	params := DefaultParameters()
+	params.RuleDirs = []string{tmpDir}
+	params.AuditLogFiles = []string{tmpDir}
+
+	err := ValidateParameters(params)
+	if err == nil {
+		t.Fatal("ValidateParameters() expected error for directory --audit-log")
+	}
+	if !strings.Contains(err.Error(), "regular file") {
+		t.Fatalf("expected regular file error, got %v", err)
+	}
+}
+
+func TestValidateParametersAcceptsValidAuditLogPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	auditPath := filepath.Join(tmpDir, "audit.log")
+	if err := os.WriteFile(auditPath, []byte("type=SYSCALL msg=audit(1.0:1):\n"), 0600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	params := DefaultParameters()
+	params.RuleDirs = []string{tmpDir}
+	params.AuditLogFiles = []string{auditPath}
+
+	if err := ValidateParameters(params); err != nil {
+		t.Fatalf("ValidateParameters() unexpected error: %v", err)
+	}
+}
+
 func TestValidateParametersRejectsInvalidNumericValues(t *testing.T) {
 	tmpDir := t.TempDir()
 	params := DefaultParameters()

@@ -32,16 +32,16 @@ type Agent struct {
 	listener      *ebpfprovider.Listener
 	auditProvider *auditprovider.AuditProvider
 	dist          *distributor.Distributor
-	consumer   *sigma.SigmaConsumer
-	ioc        *ioc.Consumer
-	correlator *enrichment.Correlator
-	enricher   *enrichment.EventEnricher
-	statsStop  chan struct{}
-	statsDone  chan struct{}
-	logFile    *os.File
-	closers    []func() error
-	pprofSrv   *http.Server
-	pprofAddr  string
+	consumer      *sigma.SigmaConsumer
+	ioc           *ioc.Consumer
+	correlator    *enrichment.Correlator
+	enricher      *enrichment.EventEnricher
+	statsStop     chan struct{}
+	statsDone     chan struct{}
+	logFile       *os.File
+	closers       []func() error
+	pprofSrv      *http.Server
+	pprofAddr     string
 }
 
 // New creates a new agent from the given parameters.
@@ -148,6 +148,7 @@ func (a *Agent) Run() error {
 	// Enable all sources (errors are checked during Initialize)
 	_ = a.listener.AddSource(ebpfprovider.SourceProcessExec)
 	_ = a.listener.AddSource(ebpfprovider.SourceFileCreate)
+	_ = a.listener.AddSource(ebpfprovider.SourceFileTime)
 	_ = a.listener.AddSource(ebpfprovider.SourceNetConnect)
 	_ = a.listener.AddSource(ebpfprovider.SourceBpfEvent)
 

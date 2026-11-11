@@ -46,6 +46,11 @@ func ValidateParameters(params Parameters) error {
 			return err
 		}
 	}
+	for _, path := range params.AuditLogFiles {
+		if err := validateRegularFilePath("--audit-log", path); err != nil {
+			return err
+		}
+	}
 
 	if params.RingBufSizePages <= 0 || !isPowerOfTwo(params.RingBufSizePages) {
 		return fmt.Errorf("--ringbuf-size must be a positive power of 2, got %d", params.RingBufSizePages)
@@ -162,7 +167,14 @@ func isLoopbackHost(host string) bool {
 }
 
 func validateIOCFilePath(flagName, path string) error {
+	return validateRegularFilePath(flagName, path)
+}
+
+func validateRegularFilePath(flagName, path string) error {
 	cleanPath := filepath.Clean(strings.TrimSpace(path))
+	if cleanPath == "." {
+		return fmt.Errorf("%s cannot contain empty paths", flagName)
+	}
 	st, err := os.Stat(cleanPath)
 	if err != nil {
 		return fmt.Errorf("%s file %q: %w", flagName, cleanPath, err)

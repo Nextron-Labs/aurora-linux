@@ -12,6 +12,8 @@ func TestApplyConfigFileSetsSupportedFields(t *testing.T) {
 	cfg := `
 rules:
   - /tmp/rules/linux
+audit-log:
+  - " /var/log/audit/audit.log "
 filename-iocs: /tmp/filename-iocs.txt
 c2-iocs: /tmp/c2-iocs.txt
 logfile: /tmp/aurora.log
@@ -46,6 +48,9 @@ pprof-listen: 127.0.0.1:6060
 
 	if len(params.RuleDirs) != 1 || params.RuleDirs[0] != "/tmp/rules/linux" {
 		t.Fatalf("RuleDirs = %#v, want [/tmp/rules/linux]", params.RuleDirs)
+	}
+	if len(params.AuditLogFiles) != 1 || params.AuditLogFiles[0] != "/var/log/audit/audit.log" {
+		t.Fatalf("AuditLogFiles = %#v, want [/var/log/audit/audit.log]", params.AuditLogFiles)
 	}
 	if params.FilenameIOCPath != "/tmp/filename-iocs.txt" {
 		t.Fatalf("FilenameIOCPath = %q, want /tmp/filename-iocs.txt", params.FilenameIOCPath)

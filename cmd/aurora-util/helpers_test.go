@@ -466,7 +466,6 @@ func TestSelectAuroraAssetExplicitNotFound(t *testing.T) {
 
 func TestSelectAuroraAssetNoMatch(t *testing.T) {
 	t.Parallel()
-	// Use asset names without "aurora" to avoid the fallback path.
 	assets := []githubReleaseAsset{
 		{Name: "unrelated-tool-v1.0-windows-amd64.zip", BrowserDownloadURL: "https://example.test/win.zip"},
 		{Name: "readme.md", BrowserDownloadURL: "https://example.test/readme"},
@@ -474,6 +473,21 @@ func TestSelectAuroraAssetNoMatch(t *testing.T) {
 	_, err := selectAuroraAsset(assets, "linux", "arm64", "")
 	if err == nil {
 		t.Fatal("expected error for no matching asset")
+	}
+	if !strings.Contains(err.Error(), "no matching release asset") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSelectAuroraAssetRejectsWrongPlatformAuroraArchive(t *testing.T) {
+	t.Parallel()
+	assets := []githubReleaseAsset{
+		{Name: "aurora-v1.0-windows-amd64.zip", BrowserDownloadURL: "https://example.test/win.zip"},
+	}
+
+	_, err := selectAuroraAsset(assets, "linux", "amd64", "")
+	if err == nil {
+		t.Fatal("expected error for wrong platform aurora asset")
 	}
 	if !strings.Contains(err.Error(), "no matching release asset") {
 		t.Fatalf("unexpected error: %v", err)
