@@ -79,6 +79,9 @@ func main() {
 	flags.BoolVar(&params.SigmaNoCollapseWS, "sigma-no-collapse-ws", params.SigmaNoCollapseWS, "Disable sigma whitespace collapsing during pattern matching (default: true)")
 	flags.StringVar(&params.PprofListen, "pprof-listen", "", "Enable pprof HTTP endpoint on loopback host:port (example: 127.0.0.1:6060)")
 	flags.StringSliceVar(&params.AuditLogFiles, "audit-log", nil, "Paths to auditd log files to process (repeatable; enables audit provider)")
+	flags.StringSliceVar(&params.SyslogFiles, "syslog-file", nil, "Paths to syslog files to tail (repeatable; e.g. /var/log/syslog, /var/log/messages)")
+	flags.BoolVar(&params.SyslogAuto, "syslog-auto", false, "Auto-detect syslog files across common distributions; falls back to journald when no file is available")
+	flags.BoolVar(&params.SyslogJournald, "syslog-journald", false, "Tail the systemd journal via journalctl --follow (combinable with --syslog-file)")
 
 	if err := rootCmd.Execute(); err != nil {
 		writeCLIError(err, params.JSONOutput, os.Stderr)
@@ -162,6 +165,12 @@ func applyCLIOverrides(set *pflag.FlagSet, dst *agent.Parameters, cli agent.Para
 			dst.PprofListen = cli.PprofListen
 		case "audit-log":
 			dst.AuditLogFiles = append([]string(nil), cli.AuditLogFiles...)
+		case "syslog-file":
+			dst.SyslogFiles = append([]string(nil), cli.SyslogFiles...)
+		case "syslog-auto":
+			dst.SyslogAuto = cli.SyslogAuto
+		case "syslog-journald":
+			dst.SyslogJournald = cli.SyslogJournald
 		}
 	})
 }

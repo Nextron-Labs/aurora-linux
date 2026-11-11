@@ -81,6 +81,19 @@ type Parameters struct {
 
 	// AuditLogFiles contains paths to auditd log files for the audit provider.
 	AuditLogFiles []string
+
+	// SyslogFiles contains paths to syslog files for the syslog provider.
+	// When non-empty the syslog provider is enabled.
+	SyslogFiles []string
+
+	// SyslogAuto enables auto-detection of syslog file paths across common
+	// Linux distributions (and falls back to journald via journalctl when
+	// no syslog file is available).
+	SyslogAuto bool
+
+	// SyslogJournald enables tailing the systemd journal via journalctl.
+	// Combinable with SyslogFiles.
+	SyslogJournald bool
 }
 
 // DefaultParameters returns parameters with sensible defaults.
