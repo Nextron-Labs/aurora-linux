@@ -12,8 +12,31 @@ import (
 
 	"github.com/Nextron-Labs/aurora-linux/lib/enrichment"
 	"github.com/Nextron-Labs/aurora-linux/lib/provider"
+	auditprovider "github.com/Nextron-Labs/aurora-linux/lib/provider/audit"
 	log "github.com/sirupsen/logrus"
 )
+
+func TestAddAuditStatsReportsDroppedLines(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.log")
+	if err := os.WriteFile(path, []byte("garbage\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	p := auditprovider.New(path)
+	p.SetFollow(false)
+	p.SendEvents(func(provider.Event) {})
+
+	fields := log.Fields{}
+	(&Agent{auditProvider: p}).addAuditStats(fields)
+	if got := fields["audit_events_lost"]; got != uint64(1) {
+		t.Errorf("audit_events_lost = %v, want 1", got)
+	}
+
+	fields = log.Fields{}
+	(&Agent{}).addAuditStats(fields)
+	if _, ok := fields["audit_events_lost"]; ok {
+		t.Error("audit_events_lost set without an audit provider")
+	}
+}
 
 func TestRunFailsWhenRuleDirectoriesYieldNoLoadableRules(t *testing.T) {
 	params := DefaultParameters()

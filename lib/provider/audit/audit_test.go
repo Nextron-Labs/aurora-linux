@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Nextron-Labs/aurora-linux/lib/provider"
 )
@@ -102,20 +103,17 @@ func TestRecordGrouper(t *testing.T) {
 	}
 
 	grouper := newRecordGrouper()
-	var records []*auditRecord
 
 	for _, l := range lines {
 		parsed, err := parseLine(l)
 		if err != nil {
 			t.Fatalf("parseLine: %v", err)
 		}
-		if completed := grouper.AddLine(parsed); completed != nil {
-			records = append(records, completed)
+		if completed := grouper.AddLine(parsed, time.Now()); completed != nil {
+			t.Fatalf("AddLine completed record %q early", completed.Key)
 		}
 	}
-	if final := grouper.Flush(); final != nil {
-		records = append(records, final)
-	}
+	records := grouper.Flush()
 
 	if len(records) != 2 {
 		t.Fatalf("got %d records, want 2", len(records))
@@ -144,9 +142,9 @@ func TestMapRecordToEventsRawFields(t *testing.T) {
 	grouper := newRecordGrouper()
 	for _, l := range lines {
 		parsed, _ := parseLine(l)
-		grouper.AddLine(parsed)
+		grouper.AddLine(parsed, time.Now())
 	}
-	record := grouper.Flush()
+	record := grouper.Flush()[0]
 	events := mapRecordToEvents(record)
 
 	if len(events) != 4 {
@@ -212,9 +210,9 @@ func TestMapRecordToEventsExecve(t *testing.T) {
 	grouper := newRecordGrouper()
 	for _, l := range lines {
 		parsed, _ := parseLine(l)
-		grouper.AddLine(parsed)
+		grouper.AddLine(parsed, time.Now())
 	}
-	record := grouper.Flush()
+	record := grouper.Flush()[0]
 	events := mapRecordToEvents(record)
 
 	if len(events) != 2 {
@@ -251,9 +249,9 @@ func TestSigmaRuleCompatibility(t *testing.T) {
 	grouper := newRecordGrouper()
 	for _, l := range lines {
 		parsed, _ := parseLine(l)
-		grouper.AddLine(parsed)
+		grouper.AddLine(parsed, time.Now())
 	}
-	record := grouper.Flush()
+	record := grouper.Flush()[0]
 	events := mapRecordToEvents(record)
 
 	// The SYSCALL event should match: key='susp_activity'

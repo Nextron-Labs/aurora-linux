@@ -2,7 +2,6 @@ package audit
 
 import (
 	"strconv"
-	"strings"
 
 	"github.com/Nextron-Labs/aurora-linux/lib/enrichment"
 	"github.com/Nextron-Labs/aurora-linux/lib/provider"
@@ -82,29 +81,8 @@ func buildRawFieldsMap(line *auditLine, syscallFields map[string]string) enrichm
 
 	// Add this record's own fields (overwrites SYSCALL fields if same key)
 	for k, v := range line.Fields {
-		// Decode hex-encoded fields (common in PROCTITLE, EXECVE)
-		if shouldDecodeHex(line.RecordType, k) {
-			v = decodeHexField(v)
-		}
 		fields.AddField(k, v)
 	}
 
 	return fields
 }
-
-// shouldDecodeHex returns true for fields that are commonly hex-encoded.
-func shouldDecodeHex(recordType, key string) bool {
-	switch recordType {
-	case "PROCTITLE":
-		return key == "proctitle"
-	case "EXECVE":
-		// EXECVE args (a0, a1, ...) can be hex-encoded
-		return strings.HasPrefix(key, "a") && len(key) >= 2 && isDigit(key[1])
-	}
-	return false
-}
-
-func isDigit(b byte) bool {
-	return b >= '0' && b <= '9'
-}
-
