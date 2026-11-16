@@ -171,11 +171,15 @@ extern int LINUX_KERNEL_VERSION __kconfig;
 SEC("fentry/security_inode_setattr")
 int hook_inode_setattr(unsigned long long *ctx)
 {
-	struct dentry *dentry;
-	if (LINUX_KERNEL_VERSION >= KERNEL_VERSION(5, 12, 0))
-		dentry = (struct dentry *)ctx[1];
-	else
-		dentry = (struct dentry *)ctx[0];
+	// Load both slots and pin each value with barrier_var: otherwise clang
+	// turns the choice into a single load through ctx+off, which the verifier
+	// rejects ("dereference of modified ctx ptr"). The hook always has at
+	// least two arguments, so both slots are valid.
+	struct dentry *arg0 = (struct dentry *)ctx[0];
+	struct dentry *arg1 = (struct dentry *)ctx[1];
+	barrier_var(arg0);
+	barrier_var(arg1);
+	struct dentry *dentry = LINUX_KERNEL_VERSION >= KERNEL_VERSION(5, 12, 0) ? arg1 : arg0;
 
 	struct watch_val *w = lookup_dentry_inode(dentry);
 	if (!(w && (w->flags & W_FILE) && (w->perms & PERM_A)))
