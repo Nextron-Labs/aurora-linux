@@ -34,18 +34,25 @@ static __always_inline struct mount *ap_real_mount(struct vfsmount *mnt)
 	return (struct mount *)((void *)mnt - bpf_core_field_offset(struct mount, mnt));
 }
 
-// Since 6.8 dentry::d_name is a const alias of __d_name inside an anonymous
-// union; CO-RE resolves the non-const member reliably, older kernels only
-// have d_name.
+// Recent kernels make dentry::d_name a const alias of __d_name inside an
+// anonymous union (6.12 does not have it yet); CO-RE resolves the non-const
+// member reliably, older kernels only have d_name. Both sides go through flavor structs because
+// vmlinux.h comes from the build host and may have either field, not both.
+struct dentry___new {
+	struct qstr __d_name;
+} __attribute__((preserve_access_index));
+
 struct dentry___old {
 	struct qstr d_name;
 } __attribute__((preserve_access_index));
 
 static __always_inline void ap_dname(struct dentry *d, __u32 *len, const unsigned char **name)
 {
-	if (bpf_core_field_exists(d->__d_name)) {
-		*len = BPF_CORE_READ(d, __d_name.len);
-		*name = BPF_CORE_READ(d, __d_name.name);
+	struct dentry___new *n = (void *)d;
+
+	if (bpf_core_field_exists(n->__d_name)) {
+		*len = BPF_CORE_READ(n, __d_name.len);
+		*name = BPF_CORE_READ(n, __d_name.name);
 	} else {
 		struct dentry___old *o = (void *)d;
 		*len = BPF_CORE_READ(o, d_name.len);

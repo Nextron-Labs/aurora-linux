@@ -291,7 +291,7 @@ go vet ./...
 ### On Linux (production)
 
 ```bash
-# Prerequisites: clang, libbpf headers, bpftool (for vmlinux.h)
+# Prerequisites: clang, bpftool (for vmlinux.h); libbpf headers are vendored in lib/provider/ebpf/bpf/include
 # Generate vmlinux.h if not present:
 bpftool btf dump file /sys/kernel/btf/vmlinux format c > lib/provider/ebpf/bpf/vmlinux.h
 

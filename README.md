@@ -122,8 +122,8 @@ Limits (be aware): a root attacker who can still run `systemctl stop aurora` (si
 
 - Linux kernel **5.8+** with BTF (`/sys/kernel/btf/vmlinux`)
 - Root privileges (or `CAP_BPF` + `CAP_PERFMON` + `CAP_SYS_PTRACE`)
-- Go 1.24+ (build only)
-- clang + libbpf headers (BPF compilation only)
+- Go 1.25+ (build only)
+- clang (BPF compilation only; the libbpf headers are vendored)
 
 ### Kernel support matrix
 
