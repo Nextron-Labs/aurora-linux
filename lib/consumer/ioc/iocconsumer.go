@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -43,6 +44,8 @@ type Consumer struct {
 	cfg Config
 
 	filenameEntries []filenameIOCEntry
+	filenameIdx     *filenameIndex
+	idxOnce         sync.Once
 	c2Domains       map[string]c2IOCEntry
 	c2IPs           map[string]c2IOCEntry
 
@@ -75,6 +78,7 @@ func (c *Consumer) Initialize() error {
 	}
 
 	c.filenameEntries = filenameEntries
+	c.idxOnce.Do(func() { c.filenameIdx = newFilenameIndex(c.filenameEntries) })
 	c.c2Domains = c2Domains
 	c.c2IPs = c2IPs
 
@@ -91,12 +95,29 @@ func (c *Consumer) Initialize() error {
 
 // HandleEvent evaluates an event against loaded IOC entries.
 func (c *Consumer) HandleEvent(event provider.Event) error {
+	// Built once on first use (cheap atomic check afterwards); entries are
+	// immutable after Initialize.
+	c.idxOnce.Do(func() { c.filenameIdx = newFilenameIndex(c.filenameEntries) })
+	var candBuf [32]int
 	for _, key := range filenameIOCMatchFields {
 		value := strings.TrimSpace(event.Value(key).String)
 		if value == "" {
 			continue
 		}
-		for _, entry := range c.filenameEntries {
+		cands, all := candBuf[:0], true
+		if c.filenameIdx != nil {
+			cands, all = c.filenameIdx.candidates(value, cands)
+		}
+		n := len(cands)
+		if all {
+			n = len(c.filenameEntries)
+		}
+		for k := 0; k < n; k++ {
+			i := k
+			if !all {
+				i = cands[k]
+			}
+			entry := c.filenameEntries[i]
 			if !entry.pattern.MatchString(value) {
 				continue
 			}

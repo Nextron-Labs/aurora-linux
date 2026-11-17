@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	sigmaengine "github.com/markuskont/go-sigma-rule-engine"
 	"github.com/Nextron-Labs/aurora-linux/lib/provider"
+	sigmaengine "github.com/Nextron-Labs/aurora-linux/third_party/go-sigma-rule-engine"
 	log "github.com/sirupsen/logrus"
 	yaml "gopkg.in/yaml.v2"
 )
@@ -225,13 +225,13 @@ func evalBranchForEvidence(
 	case *sigmaengine.NodeNot:
 		match, applicable, _ := evalBranchForEvidence(b.B, event, !negated, meta)
 		if !applicable {
-			return match, false, nil
+			return true, true, nil // absent fields: the negated branch does not match
 		}
 		return !match, true, nil
 	case sigmaengine.NodeNot:
 		match, applicable, _ := evalBranchForEvidence(b.B, event, !negated, meta)
 		if !applicable {
-			return match, false, nil
+			return true, true, nil // absent fields: the negated branch does not match
 		}
 		return !match, true, nil
 	case *sigmaengine.Selection:
@@ -414,6 +414,16 @@ func describeStringMatcherPatterns(matcher sigmaengine.StringMatcher, value stri
 		if cur.StringMatch(value) {
 			return []string{"<glob>"}
 		}
+	case sigmaengine.StarPattern:
+		if cur.StringMatch(value) {
+			return []string{"<glob>"}
+		}
+	case sigmaengine.ContainsPattern:
+		// Substring matchers replace the glob matcher for wildcard-free
+		// "contains" patterns; keep the evidence format unchanged.
+		if cur.StringMatch(value) {
+			return []string{"<glob>"}
+		}
 	default:
 		if matcher.StringMatch(value) {
 			return []string{"<pattern>"}
@@ -579,7 +589,7 @@ func newRuleFieldPattern(modifiers []string, pattern string, noCollapseWS bool) 
 	}
 
 	modifier, all := textPatternFromModifiers(modifiers)
-	matcher, err := sigmaengine.NewStringMatcher(modifier, false, all, noCollapseWS, pattern)
+	matcher, err := sigmaengine.NewStringMatcher(modifier, true, all, noCollapseWS, pattern)
 	if err == nil {
 		p.Matcher = matcher
 	}

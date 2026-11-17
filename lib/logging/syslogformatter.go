@@ -50,7 +50,7 @@ func (f *SyslogFormatter) Format(entry *log.Entry) ([]byte, error) {
 
 	if entry.Message != "" {
 		b.WriteString(" ")
-		b.WriteString(entry.Message)
+		b.WriteString(sanitizeMessage(entry.Message))
 	}
 
 	keys := make([]string, 0, len(entry.Data))

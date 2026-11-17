@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	sigmaengine "github.com/markuskont/go-sigma-rule-engine"
 	"github.com/Nextron-Labs/aurora-linux/lib/enrichment"
 	"github.com/Nextron-Labs/aurora-linux/lib/provider"
+	sigmaengine "github.com/Nextron-Labs/aurora-linux/third_party/go-sigma-rule-engine"
 	log "github.com/sirupsen/logrus"
 )
 
