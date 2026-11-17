@@ -373,13 +373,23 @@ func (a *Agent) shutdown() {
 		correlatorLen = a.correlator.Len()
 	}
 
-	log.WithFields(log.Fields{
+	fields := log.Fields{
 		"events_processed": processed,
 		"sigma_matches":    sigmaMatches,
 		"ioc_matches":      iocMatches,
 		"events_lost":      lost,
 		"correlator_size":  correlatorLen,
-	}).Info("Final statistics")
+	}
+	a.addAuditStats(fields)
+	log.WithFields(fields).Info("Final statistics")
+}
+
+// addAuditStats reports audit lines dropped as unparseable. events_lost only
+// covers the eBPF ring buffers.
+func (a *Agent) addAuditStats(fields log.Fields) {
+	if a.auditProvider != nil {
+		fields["audit_events_lost"] = a.auditProvider.LostEvents()
+	}
 }
 
 func (a *Agent) startPprofEndpoint() error {
@@ -469,6 +479,7 @@ func (a *Agent) reportStats(stop <-chan struct{}, done chan<- struct{}) {
 			"events_lost":      lost,
 			"correlator_size":  correlatorLen,
 		}
+		a.addAuditStats(fields)
 
 		if processed > 0 && lost > 0 {
 			lostPct := float64(lost) / float64(processed+lost) * 100
