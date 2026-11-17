@@ -98,9 +98,11 @@ jobs:
           go generate ./lib/provider/ebpf
 
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        # v2: golangci-lint v1 is built with Go 1.24 and refuses this
+        # module (go 1.25, required by cilium/ebpf v0.22).
+        uses: golangci/golangci-lint-action@v8
         with:
-          version: v1.64
+          version: v2.5.0
           args: --timeout=5m
 
   test:
