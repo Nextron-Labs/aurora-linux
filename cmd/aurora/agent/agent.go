@@ -196,16 +196,21 @@ func (a *Agent) Run() error {
 	}()
 
 	// Start audit provider event collection if enabled
+	var auditDone chan struct{}
 	if a.auditProvider != nil {
-		go a.auditProvider.SendEvents(func(event provider.Event) {
-			if a.params.Trace {
-				a.traceEvent(event)
-			}
-			if a.shouldExcludeEvent(event) {
-				return
-			}
-			a.dist.HandleEvent(event)
-		})
+		auditDone = make(chan struct{})
+		go func() {
+			defer close(auditDone)
+			a.auditProvider.SendEvents(func(event provider.Event) {
+				if a.params.Trace {
+					a.traceEvent(event)
+				}
+				if a.shouldExcludeEvent(event) {
+					return
+				}
+				a.dist.HandleEvent(event)
+			})
+		}()
 	}
 
 	// Wait for signal
@@ -215,6 +220,11 @@ func (a *Agent) Run() error {
 	// Graceful shutdown
 	a.shutdown()
 	<-doneCh
+	// The audit provider flushes records still waiting to complete when it
+	// stops, so wait for it before Run returns and the outputs are closed.
+	if auditDone != nil {
+		<-auditDone
+	}
 
 	log.Info("Aurora Linux detection agent stopped")
 	return nil
@@ -273,13 +283,23 @@ func (a *Agent) shutdown() {
 		correlatorLen = a.correlator.Len()
 	}
 
-	log.WithFields(log.Fields{
+	fields := log.Fields{
 		"events_processed": processed,
 		"sigma_matches":    sigmaMatches,
 		"ioc_matches":      iocMatches,
 		"events_lost":      lost,
 		"correlator_size":  correlatorLen,
-	}).Info("Final statistics")
+	}
+	a.addAuditStats(fields)
+	log.WithFields(fields).Info("Final statistics")
+}
+
+// addAuditStats reports audit lines dropped as unparseable. events_lost only
+// covers the eBPF ring buffers.
+func (a *Agent) addAuditStats(fields log.Fields) {
+	if a.auditProvider != nil {
+		fields["audit_events_lost"] = a.auditProvider.LostEvents()
+	}
 }
 
 func (a *Agent) startPprofEndpoint() error {
@@ -369,6 +389,7 @@ func (a *Agent) reportStats(stop <-chan struct{}, done chan<- struct{}) {
 			"events_lost":      lost,
 			"correlator_size":  correlatorLen,
 		}
+		a.addAuditStats(fields)
 
 		if processed > 0 && lost > 0 {
 			lostPct := float64(lost) / float64(processed+lost) * 100
