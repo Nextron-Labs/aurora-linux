@@ -10,6 +10,7 @@ import (
 
 	"github.com/Nextron-Labs/aurora-linux/lib/provider"
 	"github.com/cilium/ebpf"
+	"github.com/cilium/ebpf/btf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
 	log "github.com/sirupsen/logrus"
@@ -51,14 +52,66 @@ var hookCoverage = map[string][]string{
 // kernels; AURORA_BPF_LEGACY=1, used to test the pre-5.17 code path.
 func forceLegacyHooks() bool { return os.Getenv("AURORA_BPF_LEGACY") == "1" }
 
+// kernelFuncLookup reads the running kernel's BTF and returns a function that
+// reports whether the kernel has a function of that name. A variable so tests
+// can replace it.
+var kernelFuncLookup = func() (func(name string) bool, error) {
+	spec, err := btf.LoadKernelSpec()
+	if err != nil {
+		return nil, err
+	}
+	return func(name string) bool {
+		var fn *btf.Func
+		err := spec.TypeByName(name, &fn)
+		// Only a definite "not found" counts as missing.
+		return !errors.Is(err, btf.ErrNotFound)
+	}, nil
+}
+
+// pruneMissingAttachTargets removes fentry/fexit programs whose target
+// function does not exist in this kernel: the security_path_* hooks on kernels
+// built without CONFIG_SECURITY_PATH (e.g. the Docker Desktop / LinuxKit
+// kernel), or the __ia32_* / compat syscall entry points without 32-bit
+// support. The kernel rejects loading such a program, and that fails the whole
+// collection, so a single missing target would otherwise cost every hook in
+// the object. A pruned program is never attached, so the tracepoints it would
+// have covered stay active (see hookCoverage).
+func pruneMissingAttachTargets(spec *ebpf.CollectionSpec, object string) {
+	var candidates []string
+	for name, p := range spec.Programs {
+		if p.Type == ebpf.Tracing && p.AttachTo != "" &&
+			(p.AttachType == ebpf.AttachTraceFEntry || p.AttachType == ebpf.AttachTraceFExit) {
+			candidates = append(candidates, name)
+		}
+	}
+	if len(candidates) == 0 {
+		return
+	}
+	exists, err := kernelFuncLookup()
+	if err != nil {
+		// No kernel BTF: fentry cannot work at all, and the load reports why.
+		return
+	}
+	sort.Strings(candidates)
+	for _, name := range candidates {
+		if target := spec.Programs[name].AttachTo; !exists(target) {
+			log.WithFields(log.Fields{"object": object, "program": name, "hook": target}).
+				Debug("Hook target not in this kernel; skipping program and keeping tracepoint fallback")
+			delete(spec.Programs, name)
+		}
+	}
+}
+
 // loadHookCollection loads the modern variant of a hook object and falls back
-// to the legacy one (kernels without bpf_loop, < 5.17).
+// to the legacy one (kernels without bpf_loop, < 5.17). Programs whose hook
+// target is missing from the kernel are dropped before loading.
 func loadHookCollection(name string, modern, legacy func() (*ebpf.CollectionSpec, error),
 	opts ebpf.CollectionOptions) (*ebpf.CollectionSpec, *ebpf.Collection, bool, error) {
 	var firstErr error
 	if !forceLegacyHooks() {
 		spec, err := modern()
 		if err == nil {
+			pruneMissingAttachTargets(spec, name)
 			coll, err2 := ebpf.NewCollectionWithOptions(spec, opts)
 			if err2 == nil {
 				return spec, coll, false, nil
@@ -72,6 +125,7 @@ func loadHookCollection(name string, modern, legacy func() (*ebpf.CollectionSpec
 	if err != nil {
 		return nil, nil, false, errors.Join(firstErr, err)
 	}
+	pruneMissingAttachTargets(spec, name)
 	coll, err := ebpf.NewCollectionWithOptions(spec, opts)
 	if err != nil {
 		return nil, nil, false, errors.Join(firstErr, classifyBPFError(err, name))
@@ -129,6 +183,7 @@ func (l *Listener) initHooks() (map[string]bool, error) {
 	// Per-ABI syscall entry hooks for the syscalls without an LSM hook. They
 	// share this object's ring buffer and self-exclusion map.
 	if scSpec, err := loadSyscallHooks(); err == nil {
+		pruneMissingAttachTargets(scSpec, "syscall_hooks")
 		scColl, err := ebpf.NewCollectionWithOptions(scSpec, ebpf.CollectionOptions{
 			MapReplacements: map[string]*ebpf.Map{
 				"hook_events":      coll.Maps["hook_events"],
