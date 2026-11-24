@@ -41,16 +41,7 @@ func TestInitializeExcludesRulesThatCanNeverMatch(t *testing.T) {
 	writeRule(t, dir, "svc.yml", rule("svc", "00000000-0000-0000-0000-000000000003",
 		"  product: linux\n  service: auth",
 		"  sel:\n    Image|endswith: /sshd", "sel"))
-	writeRule(t, dir, "field.yml", rule("field", "00000000-0000-0000-0000-000000000004",
-		"  product: linux\n  category: process_creation",
-		"  sel:\n    Hashes|contains: abc", "sel"))
-	// Unknown field only inside a negated filter: still satisfiable.
-	writeRule(t, dir, "filter.yml", rule("filter", "00000000-0000-0000-0000-000000000005",
-		"  product: linux\n  category: process_creation",
-		"  sel:\n    Image|endswith: /sh\n  filter:\n    Hashes|contains: abc", "sel and not filter"))
-
-	known := func(service, f string) bool { return f == "Image" }
-	c := New(Config{RuleDirs: []string{dir}, MinLevel: "info", FieldKnown: known})
+	c := New(Config{RuleDirs: []string{dir}, MinLevel: "info"})
 	if err := c.InitializeWithRules([]string{dir}); err != nil {
 		t.Fatal(err)
 	}
@@ -59,16 +50,16 @@ func TestInitializeExcludesRulesThatCanNeverMatch(t *testing.T) {
 	for _, e := range c.Excluded() {
 		got[e.Title] = e.Reason
 	}
-	if len(got) != 3 {
-		t.Fatalf("excluded = %v, want win, svc, field", got)
+	if len(got) != 2 {
+		t.Fatalf("excluded = %v, want win, svc", got)
 	}
-	for title, want := range map[string]string{"win": "windows", "svc": "auth", "field": "Hashes"} {
+	for title, want := range map[string]string{"win": "windows", "svc": "auth"} {
 		if !strings.Contains(got[title], want) {
 			t.Errorf("%s reason %q does not mention %q", title, got[title], want)
 		}
 	}
-	if len(c.ruleset.Rules) != 2 {
-		t.Fatalf("active rules = %d, want 2", len(c.ruleset.Rules))
+	if len(c.ruleset.Rules) != 1 {
+		t.Fatalf("active rules = %d, want 1", len(c.ruleset.Rules))
 	}
 }
 
@@ -100,27 +91,6 @@ func TestRedactArgvAndProctitle(t *testing.T) {
 	}
 	if got := sanitizeFieldForLogging("message", "login failed password=s3cret user=a"); strings.Contains(got, "s3cret") {
 		t.Fatalf("syslog message leaked: %s", got)
-	}
-}
-
-// A filter on a field the event lacks must not disable the rule.
-func TestNotFilterOnMissingFieldStillMatches(t *testing.T) {
-	dir := t.TempDir()
-	writeRule(t, dir, "r.yml", rule("r", "00000000-0000-0000-0000-0000000000aa",
-		"  product: linux\n  category: process_creation",
-		"  sel:\n    Image|endswith: /bash\n  filter:\n    ParentImage: /usr/bin/sshd", "sel and not filter"))
-	c := New(Config{RuleDirs: []string{dir}, MinLevel: "info"})
-	if err := c.InitializeWithRules([]string{dir}); err != nil {
-		t.Fatal(err)
-	}
-	if n := len(c.EvalFieldsMap(map[string]string{"Image": "/bin/bash"})); n != 1 {
-		t.Fatalf("event without ParentImage: %d matches, want 1", n)
-	}
-	if n := len(c.EvalFieldsMap(map[string]string{"Image": "/bin/bash", "ParentImage": "/usr/bin/sshd"})); n != 0 {
-		t.Fatalf("filtered event matched")
-	}
-	if n := len(c.EvalFieldsMap(map[string]string{"Image": "/bin/bash", "ParentImage": "/usr/bin/cron"})); n != 1 {
-		t.Fatalf("unfiltered event did not match")
 	}
 }
 

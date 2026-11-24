@@ -430,16 +430,15 @@ per-program services such as `sshd`). Rules without a service see every event.
 `Config.LogsourceServices` tells the consumer which services are collected;
 rules for others are excluded at startup.
 
-### Vendored Sigma engine (`third_party/go-sigma-rule-engine`, an in-repo package: no `replace` directive needed)
+### Sigma engine (`github.com/markuskont/go-sigma-rule-engine` v0.3.0, unpatched)
 
-Upstream v0.3.0 plus Aurora patches: per-rule skip reasons (`Ruleset.Skipped`),
-`Tree.CanMatch/Fields` (rule coverage), keyword `|all` maps, integer keywords,
-`selection_*` keyword lists, `---` only counts as a document separator at line
-start, case-insensitive equality/prefix/suffix, and fast matchers
-(`ContainsPattern`, `StarPattern`) replacing the glob engine for wildcard-free
-and `*`-only patterns. Any new `StringMatcher` type must also be listed in
-`optimizeStringMatchers`, otherwise `Optimize()` silently drops it.
-Benchmark: `go test ./lib/provider/ebpf -run xxx -bench SigmaHandle`.
+The upstream module is used as-is. Known gaps compared with Sigma semantics:
+rules using `|all` keyword maps, integer keywords, `selection_*` keyword lists or
+`---` inside a reference URL fail to load (counted in the "failed"/"unsupported"
+startup log fields); `selection and not filter` does not match when the event
+lacks the filter field; matching is case-sensitive. Rules excluded by logsource
+(product/service) are reported at startup; `--strict-rules` fails startup on
+any excluded or unloadable rule.
 
 ### Security-hook file/network monitor (`bpf/audit_hooks.c`, `audit_hooks.go`, `watch_registry.go`)
 

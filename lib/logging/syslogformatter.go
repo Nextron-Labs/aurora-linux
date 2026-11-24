@@ -46,7 +46,7 @@ func (f *SyslogFormatter) Format(entry *log.Entry) ([]byte, error) {
 	priority := facility*8 + severityForLevel(entry.Level)
 
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("<%d>1 %s %s %s - - -", priority, entry.Time.Format(tsFormat), hostname, appName))
+	fmt.Fprintf(&b, "<%d>1 %s %s %s - - -", priority, entry.Time.Format(tsFormat), hostname, appName)
 
 	if entry.Message != "" {
 		b.WriteString(" ")

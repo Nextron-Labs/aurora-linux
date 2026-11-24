@@ -2,10 +2,9 @@ package sigma
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
-	sigma "github.com/Nextron-Labs/aurora-linux/third_party/go-sigma-rule-engine"
+	sigma "github.com/markuskont/go-sigma-rule-engine"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -35,21 +34,7 @@ func (s *SigmaConsumer) excludeReason(tree *sigma.Tree) string {
 	if service != "" && !s.services[service] {
 		return fmt.Sprintf("logsource service %q is not collected", ls.Service)
 	}
-	if s.fieldKnown == nil {
-		return ""
-	}
-	known := func(f string) bool { return s.fieldKnown(service, f) }
-	if tree.CanMatch(known) {
-		return ""
-	}
-	var unknown []string
-	for _, f := range tree.Fields() {
-		if !known(f) {
-			unknown = append(unknown, f)
-		}
-	}
-	sort.Strings(unknown)
-	return fmt.Sprintf("requires field(s) never emitted by the enabled event sources: %s", strings.Join(unknown, ", "))
+	return ""
 }
 
 // Excluded returns the rules removed because they can never match.
@@ -60,19 +45,16 @@ func (s *SigmaConsumer) Excluded() []ExcludedRule {
 }
 
 func (s *SigmaConsumer) reportCoverage(rs *sigma.Ruleset, excluded []ExcludedRule) {
-	for _, sk := range rs.Skipped {
-		log.WithFields(log.Fields{"rule_path": sk.Path, "reason": sk.Reason}).
-			Warn("Sigma rule skipped: could not be loaded")
-	}
 	for _, ex := range excluded {
 		log.WithFields(log.Fields{
 			"rule_path": ex.Path, "sigma_rule": ex.ID, "sigma_title": ex.Title, "reason": ex.Reason,
 		}).Warn("Sigma rule excluded: it can never match on this host")
 	}
-	if len(excluded)+len(rs.Skipped) > 0 {
+	if len(excluded)+rs.Failed+rs.Unsupported > 0 {
 		log.WithFields(log.Fields{
 			"excluded_never_match": len(excluded),
-			"skipped_unloadable":   len(rs.Skipped),
+			"failed":               rs.Failed,
+			"unsupported":          rs.Unsupported,
 		}).Warn("Some Sigma rules are not active")
 	}
 }

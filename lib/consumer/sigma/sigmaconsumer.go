@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/Nextron-Labs/aurora-linux/lib/provider"
-	sigma "github.com/Nextron-Labs/aurora-linux/third_party/go-sigma-rule-engine"
+	sigma "github.com/markuskont/go-sigma-rule-engine"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/time/rate"
 )
@@ -27,8 +27,7 @@ type SigmaConsumer struct {
 	minPrio    int
 	noCollapse bool
 
-	fieldKnown func(service, field string) bool
-	services   map[string]bool
+	services map[string]bool
 	// ruleServices[i] is the lower-cased logsource service of ruleset.Rules[i]
 	// ("" = no service: sees every event).
 	ruleServices []string
@@ -92,10 +91,6 @@ type Config struct {
 	MinLevel      string  // minimum Sigma level to load (info, low, medium, high, critical)
 	NoCollapseWS  bool    // disable sigma whitespace collapsing during pattern matching
 
-	// FieldKnown reports whether the enabled event sources can emit field for
-	// rules of the given logsource service. Rules that can never match are
-	// excluded and reported. Nil disables the field check.
-	FieldKnown func(service, field string) bool
 	// LogsourceServices lists the Sigma logsource services the enabled event
 	// sources provide (nil = auditd only). Rules for other services are
 	// excluded as never matching.
@@ -136,7 +131,6 @@ func New(cfg Config) *SigmaConsumer {
 		minLevel:      minLevel,
 		minPrio:       minPrio,
 		noCollapse:    cfg.NoCollapseWS,
-		fieldKnown:    cfg.FieldKnown,
 		strictRules:   cfg.StrictRules,
 		throttleOn:    throttleOn,
 		throttleRate:  throttleRate,
@@ -203,9 +197,9 @@ func (s *SigmaConsumer) InitializeWithRules(ruleDirs []string) error {
 	s.excluded = excluded
 	s.reportCoverage(ruleset, excluded)
 
-	if s.strictRules && len(excluded)+len(ruleset.Skipped) > 0 {
+	if s.strictRules && len(excluded)+ruleset.Failed+ruleset.Unsupported > 0 {
 		return fmt.Errorf("--strict-rules: %d rule(s) can never match and %d could not be loaded (see warnings above)",
-			len(excluded), len(ruleset.Skipped))
+			len(excluded), ruleset.Failed+ruleset.Unsupported)
 	}
 
 	if len(ruleDirs) > 0 && len(ruleset.Rules) == 0 {

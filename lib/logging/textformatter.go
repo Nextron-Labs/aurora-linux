@@ -40,7 +40,7 @@ func (f *TextFormatter) Format(entry *log.Entry) ([]byte, error) {
 
 	for _, k := range keys {
 		v := entry.Data[k]
-		b.WriteString(fmt.Sprintf(" %s=%s", formatTextFieldKey(k), formatTextFieldValue(v)))
+		fmt.Fprintf(&b, " %s=%s", formatTextFieldKey(k), formatTextFieldValue(v))
 	}
 	b.WriteString("\n")
 

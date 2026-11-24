@@ -138,7 +138,6 @@ func (a *Agent) Run() error {
 		MinLevel:          a.params.MinLevel,
 		NoCollapseWS:      a.params.SigmaNoCollapseWS,
 		StrictRules:       a.params.StrictRules,
-		FieldKnown:        fieldCatalog(auditMode, a.syslogEnabled()),
 		LogsourceServices: logsourceServices(auditMode, a.syslogEnabled()),
 	})
 
@@ -734,42 +733,11 @@ func openSecureLogFile(path string) (*os.File, error) {
 	return f, nil
 }
 
-// fieldCatalog returns the predicate that tells the Sigma consumer which
-// fields the enabled event sources can emit.
-func fieldCatalog(auditMode string, syslog bool) func(service, field string) bool {
-	return func(service, field string) bool {
-		if isSyslogService(service) {
-			return syslog && syslogprovider.KnownFields[field]
-		}
-		if service != "auditd" {
-			return ebpfprovider.IsSysmonStyleField(field)
-		}
-		switch auditMode {
-		case AuditModeAuditd:
-			return true // raw audit log: any field can appear
-		case AuditModeBoth:
-			return true
-		case AuditModeEBPF:
-			return ebpfprovider.IsAuditStyleField(field)
-		}
-		return false
-	}
-}
-
 // isCanaryEvent reports whether e was produced by the anti-tamper canary
 // helper and must be hidden from detection.
 func (a *Agent) isCanaryEvent(e provider.Event) bool {
 	g := a.tamper.Load()
 	return g != nil && g.canary.Observe(e)
-}
-
-func isSyslogService(s string) bool {
-	for _, x := range syslogprovider.AllServices {
-		if x == s {
-			return true
-		}
-	}
-	return false
 }
 
 // syslogEnabled reports whether the optional syslog input is configured.

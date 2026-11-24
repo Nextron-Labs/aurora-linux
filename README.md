@@ -74,7 +74,7 @@ Known differences from a real auditd:
 - `Special File Creation via Mknod Syscall` fires for every FIFO `dockerd` creates for container stdio (as it would with auditd's `-S mknod`); expect it on Docker hosts.
 - In other containers only writes/creations of exactly-named watched files are seen (no reads, no wildcard names such as `/etc/systemd/system/*.service`).
 - A few upstream rules are inherently noisy on a real host: `System Shutdown/Reboot` fires on `runc init` run as root (it matches `init` plus any value equal to `0`), and `Use Of Hidden Paths Or Files` matches any watched `/.` path (e.g. `~/.bashrc` edits), exactly as with auditd.
-- Aurora vendors a patched `go-sigma-rule-engine` (`third_party/`, an in-repo package). Upstream v0.3.0 could not load several rules (`|all` keyword maps, integer keywords, `selection_*` keyword lists, `---` inside a reference URL), disabled any `selection and not filter` rule when the event lacked a filter field, and compared values case-sensitively. Matching is now case-insensitive with ASCII-only folding (Sigma semantics without Unicode look-alike tricks).
+- Aurora uses upstream `go-sigma-rule-engine` v0.3.0 unpatched. Known limitations: a few SigmaHQ Linux rules (about 6%: `|all` keyword maps, integer keywords, `selection_*` keyword lists, `---` inside a reference URL) fail to load; a `selection and not filter` rule never fires when the event lacks the filter field; and string matching is case-sensitive.
 
 ### Optional: syslog / journald input
 
