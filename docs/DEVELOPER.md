@@ -252,7 +252,7 @@ Internal: `SourceIp`, `SourcePort`, `User`, `ProcessId`, `Protocol`.
 
 | Package | Import Path | Purpose |
 |---------|------------|---------|
-| cilium/ebpf v0.20 | `github.com/cilium/ebpf` | Pure-Go eBPF: load BPF programs, ring buffer, maps. No CGO. |
+| cilium/ebpf v0.22 | `github.com/cilium/ebpf` | Pure-Go eBPF: load BPF programs, ring buffer, maps. No CGO. |
 | go-sigma-rule-engine v0.3 | `github.com/markuskont/go-sigma-rule-engine` | Sigma rule parsing and evaluation. Public, Apache-2.0. |
 | logrus v1.9 | `github.com/sirupsen/logrus` | Structured logging. |
 | cobra v1.10 | `github.com/spf13/cobra` | CLI framework. |
@@ -516,7 +516,7 @@ misattributed.
 ### Why markuskont/go-sigma-rule-engine and not NextronSystems/go-sigma/v2?
 
 - go-sigma/v2 is **private** -- cannot be used as a public dependency.
-- go-sigma-rule-engine is public (Apache-2.0), actively maintained.
+- go-sigma-rule-engine is public (Apache-2.0); upstream has been inactive since September 2023.
 - Its API is different: `Select(key)` + `Keywords()` instead of `GetField(key)`.
 
 ### Why correlator caches process data in two places?
