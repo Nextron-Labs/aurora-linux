@@ -42,17 +42,16 @@ build: build-aurora build-aurora-util
 bpf-ensure:
 	@if [[ "$(GOOS)" != "linux" ]]; then \
 		exit 0; \
-	fi
-	@if ls lib/provider/ebpf/*_bpfel.go >/dev/null 2>&1; then \
+	elif ls lib/provider/ebpf/*_bpfel.go >/dev/null 2>&1 && ls lib/provider/ebpf/*_bpfel.o >/dev/null 2>&1; then \
 		exit 0; \
-	fi
-	@if [[ "$(HOST_OS)" != "linux" ]]; then \
-		echo "missing lib/provider/ebpf/*_bpfel.go for GOOS=linux and host is $(HOST_OS)." >&2; \
+	elif [[ "$(HOST_OS)" != "linux" ]]; then \
+		echo "missing lib/provider/ebpf/*_bpfel.go or *_bpfel.o for GOOS=linux and host is $(HOST_OS)." >&2; \
 		echo "Generate files on a Linux host with: make bpf-generate" >&2; \
 		exit 1; \
+	else \
+		echo "generated eBPF bindings not found; running make bpf-generate"; \
+		$(MAKE) bpf-generate GOOS=$(GOOS) GOARCH=$(GOARCH) BUILDVCS=$(BUILDVCS); \
 	fi
-	@echo "generated eBPF bindings not found; running make bpf-generate"
-	@$(MAKE) bpf-generate GOOS=$(GOOS) GOARCH=$(GOARCH) BUILDVCS=$(BUILDVCS)
 
 bpf-generate:
 	@if [[ "$(HOST_OS)" != "linux" ]]; then \
@@ -82,7 +81,6 @@ vet:
 
 clean:
 	rm -f "$(AURORA_BIN)" "$(AURORA_UTIL_BIN)"
-	rm -f lib/provider/ebpf/*_bpfel.go lib/provider/ebpf/*_bpfel.o
 	rm -rf "$(DIST_DIR)"
 
 package:

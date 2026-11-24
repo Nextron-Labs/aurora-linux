@@ -12,6 +12,7 @@ const (
 
 	// Event IDs aligned with Sysmon for familiarity.
 	EventIDProcessCreation   uint16 = 1
+	EventIDFileCreateTime    uint16 = 2
 	EventIDNetworkConnection uint16 = 3
 	EventIDFileEvent         uint16 = 11
 	EventIDBpfEvent          uint16 = 100

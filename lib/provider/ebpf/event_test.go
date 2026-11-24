@@ -123,6 +123,9 @@ func TestEventConstants(t *testing.T) {
 	if EventIDProcessCreation != 1 {
 		t.Fatalf("EventIDProcessCreation = %d, want 1", EventIDProcessCreation)
 	}
+	if EventIDFileCreateTime != 2 {
+		t.Fatalf("EventIDFileCreateTime = %d, want 2", EventIDFileCreateTime)
+	}
 	if EventIDNetworkConnection != 3 {
 		t.Fatalf("EventIDNetworkConnection = %d, want 3", EventIDNetworkConnection)
 	}

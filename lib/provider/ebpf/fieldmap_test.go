@@ -206,6 +206,55 @@ func TestBuildFileFieldsMap(t *testing.T) {
 	}
 }
 
+func TestBuildFiletimeFieldsMap(t *testing.T) {
+	fields := buildFiletimeFieldsMap(
+		9100, 0,
+		"/tmp/payload",
+		"/bin/touch",
+		"root",
+		0,
+		1710000000,
+		123,
+		1710000001,
+		456,
+		false,
+	)
+
+	checks := map[string]string{
+		"TargetFilename":      "/tmp/payload",
+		"Image":               "/bin/touch",
+		"User":                "root",
+		"ProcessId":           "9100",
+		"FileFlags":           "0",
+		"NewAccessTime":       "2024-03-09T16:00:00.000000123Z",
+		"NewModificationTime": "2024-03-09T16:00:01.000000456Z",
+		"TimesNull":           "false",
+	}
+
+	for key, expected := range checks {
+		v := fields.Value(key)
+		if !v.Valid {
+			t.Errorf("field %q not found", key)
+			continue
+		}
+		if v.String != expected {
+			t.Errorf("field %q = %q, want %q", key, v.String, expected)
+		}
+	}
+}
+
+func TestFormatTimespecSpecialValues(t *testing.T) {
+	if got := formatTimespec(0, utimeNow, false); got != "now" {
+		t.Fatalf("formatTimespec(UTIME_NOW) = %q, want now", got)
+	}
+	if got := formatTimespec(0, utimeOmit, false); got != "omit" {
+		t.Fatalf("formatTimespec(UTIME_OMIT) = %q, want omit", got)
+	}
+	if got := formatTimespec(0, 0, true); got != "now" {
+		t.Fatalf("formatTimespec(timesNull) = %q, want now", got)
+	}
+}
+
 func TestBuildNetFieldsMap(t *testing.T) {
 	fields := buildNetFieldsMap(
 		7500, 33,

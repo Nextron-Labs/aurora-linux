@@ -4,8 +4,14 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Nextron-Labs/aurora-linux/lib/enrichment"
+)
+
+const (
+	utimeNow  = 0x3fffffff
+	utimeOmit = 0x3ffffffe
 )
 
 // joinCmdline converts NUL-separated /proc/PID/cmdline bytes into a
@@ -76,6 +82,48 @@ func buildFileFieldsMap(
 	fields.AddField("FileFlags", strconv.FormatUint(uint64(flags), 10))
 
 	return fields
+}
+
+// buildFiletimeFieldsMap constructs the DataFieldsMap for a file_create_time event.
+func buildFiletimeFieldsMap(
+	pid, uid uint32,
+	targetFilename string,
+	image string,
+	username string,
+	flags int32,
+	atimeSec int64,
+	atimeNsec int64,
+	mtimeSec int64,
+	mtimeNsec int64,
+	timesNull bool,
+) enrichment.DataFieldsMap {
+	fields := make(enrichment.DataFieldsMap, 9)
+
+	fields.AddField("TargetFilename", targetFilename)
+	fields.AddField("Image", image)
+	fields.AddField("User", username)
+	fields.AddField("ProcessId", strconv.FormatUint(uint64(pid), 10))
+	fields.AddField("FileFlags", strconv.FormatInt(int64(flags), 10))
+	fields.AddField("NewAccessTime", formatTimespec(atimeSec, atimeNsec, timesNull))
+	fields.AddField("NewModificationTime", formatTimespec(mtimeSec, mtimeNsec, timesNull))
+	fields.AddField("TimesNull", strconv.FormatBool(timesNull))
+
+	return fields
+}
+
+func formatTimespec(sec, nsec int64, timesNull bool) string {
+	if timesNull {
+		return "now"
+	}
+
+	switch nsec {
+	case utimeNow:
+		return "now"
+	case utimeOmit:
+		return "omit"
+	default:
+		return time.Unix(sec, nsec).UTC().Format(time.RFC3339Nano)
+	}
 }
 
 // buildNetFieldsMap constructs the DataFieldsMap for a network_connection event.

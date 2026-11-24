@@ -49,6 +49,7 @@ func TestApplyCLIOverrides(t *testing.T) {
 	flags := pflag.NewFlagSet("test", pflag.ContinueOnError)
 	var cli agent.Parameters
 	flags.StringSliceVar(&cli.RuleDirs, "rules", nil, "")
+	flags.StringSliceVar(&cli.AuditLogFiles, "audit-log", nil, "")
 	flags.StringVar(&cli.FilenameIOCPath, "filename-iocs", "", "")
 	flags.StringVar(&cli.C2IOCPath, "c2-iocs", "", "")
 	flags.StringVar(&cli.LogFile, "logfile", "", "")
@@ -59,6 +60,7 @@ func TestApplyCLIOverrides(t *testing.T) {
 
 	if err := flags.Parse([]string{
 		"--rules", "/tmp/cli-rules",
+		"--audit-log", "/var/log/audit/audit.log",
 		"--filename-iocs", "/tmp/filename-iocs.txt",
 		"--c2-iocs", "/tmp/c2-iocs.txt",
 		"--no-stdout",
@@ -80,6 +82,9 @@ func TestApplyCLIOverrides(t *testing.T) {
 	}
 	if !dst.NoStdout {
 		t.Fatal("NoStdout should be overridden from CLI")
+	}
+	if len(dst.AuditLogFiles) != 1 || dst.AuditLogFiles[0] != "/var/log/audit/audit.log" {
+		t.Fatalf("AuditLogFiles = %#v, want CLI value", dst.AuditLogFiles)
 	}
 	if dst.FilenameIOCPath != "/tmp/filename-iocs.txt" {
 		t.Fatalf("FilenameIOCPath = %q, want CLI value", dst.FilenameIOCPath)

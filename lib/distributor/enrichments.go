@@ -19,6 +19,11 @@ func RegisterLinuxEnrichments(enricher *enrichment.EventEnricher, correlator *en
 		enrichImageFromCache(fields, correlator)
 	})
 
+	// File create time (EventID 2): enrich Image from correlator if missing
+	enricher.Register("LinuxEBPF:2", func(fields enrichment.DataFieldsMap) {
+		enrichImageFromCache(fields, correlator)
+	})
+
 	// Network connection (EventID 3): enrich Image from correlator if missing
 	enricher.Register("LinuxEBPF:3", func(fields enrichment.DataFieldsMap) {
 		enrichImageFromCache(fields, correlator)

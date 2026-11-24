@@ -450,6 +450,10 @@ func TestParseUint32Invalid(t *testing.T) {
 }
 
 func TestDefaultSourceForEventUnknown(t *testing.T) {
+	if got := defaultSourceForEvent("LinuxEBPF", 2); got != "LinuxEBPF:FileCreateTime" {
+		t.Fatalf("defaultSourceForEvent(LinuxEBPF, 2) = %q, want LinuxEBPF:FileCreateTime", got)
+	}
+
 	// Non-LinuxEBPF provider
 	got := defaultSourceForEvent("OtherProvider", 1)
 	if got != "" {

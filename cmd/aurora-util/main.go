@@ -489,13 +489,6 @@ func selectAuroraAsset(assets []githubReleaseAsset, targetOS, targetArch, explic
 		return candidates[0].asset, nil
 	}
 
-	for _, asset := range assets {
-		nameLower := strings.ToLower(asset.Name)
-		if isArchiveName(nameLower) && strings.Contains(nameLower, "aurora") {
-			return asset, nil
-		}
-	}
-
 	available := make([]string, 0, len(assets))
 	for _, asset := range assets {
 		available = append(available, asset.Name)
