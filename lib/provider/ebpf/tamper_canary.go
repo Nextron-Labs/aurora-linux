@@ -183,7 +183,7 @@ func (c *Canary) Check(sources []string, timeout, maxBacklog time.Duration, prog
 	// disk.
 	cmd := exec.Command("/proc/self/exe", CanaryArg)
 	cmd.Env = []string{canaryNonceEnv + "=" + nonce}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
+	setPdeathsig(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return CanaryResult{}, err

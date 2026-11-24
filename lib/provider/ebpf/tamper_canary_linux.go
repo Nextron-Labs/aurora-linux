@@ -5,6 +5,8 @@ package ebpf
 import (
 	"net"
 	"os"
+	"os/exec"
+	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -25,4 +27,9 @@ func canaryActions(nonce string) {
 	if c, err := net.DialTimeout("tcp", "127.0.0.1:"+canaryNetPort, 300*time.Millisecond); err == nil {
 		c.Close()
 	}
+}
+
+// setPdeathsig makes the kernel kill the canary child if Aurora dies.
+func setPdeathsig(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
 }
