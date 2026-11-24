@@ -73,7 +73,6 @@ linters:
           - revive
         text: (stutters|exported:|should have comment|var-naming|increment-decrement)
     paths:
-      - third_party/
       - builtin$
       - examples$
 issues:
@@ -88,7 +87,6 @@ formatters:
   exclusions:
     generated: lax
     paths:
-      - third_party/
       - builtin$
       - examples$
       - \.go$

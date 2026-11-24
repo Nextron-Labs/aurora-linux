@@ -1,5 +1,10 @@
 package agent
 
+import (
+	"fmt"
+	"strings"
+)
+
 // Parameters holds all configuration options for the agent.
 type Parameters struct {
 	// Version is the Aurora Linux version displayed in startup output.
@@ -79,8 +84,63 @@ type Parameters struct {
 	// Empty disables runtime profiling endpoints.
 	PprofListen string
 
-	// AuditLogFiles contains paths to auditd log files for the audit provider.
+	// SyslogFiles lists syslog-style log files to tail (optional input for the
+	// Sigma linux syslog/auth/sshd/cron/... rules). Empty = disabled.
+	SyslogFiles []string
+
+	// SyslogJournal also follows the systemd journal (needs journalctl).
+	SyslogJournal bool
+
+	// TamperProtection selects the anti-tamper mode: "detect" (default; alerts
+	// on attempts to kill/debug Aurora or interfere with its eBPF programs,
+	// hardens the process, verifies sensors with a canary), "enforce" (adds
+	// BPF-LSM deny hooks; blocks other tracing eBPF tools) or "off".
+	TamperProtection string
+
+	// StrictRules makes startup fail if any Sigma rule cannot be loaded or can
+	// never match on this host (unsupported logsource or fields).
+	StrictRules bool
+
+	// AuditMode selects where auditd-compatible records (the input of the
+	// SigmaHQ linux/auditd rules) come from:
+	//   "ebpf"   (default) synthesised natively from eBPF; no auditd needed
+	//   "auditd" tail auditd log files instead (optional, needs auditd)
+	//   "both"   eBPF records plus auditd log files
+	//   "off"    do not produce auditd-compatible records
+	// When empty the mode is "ebpf".
+	AuditMode string
+
+	// AuditLogFiles contains paths to auditd log files for the audit provider
+	// (only used in auditd mode).
 	AuditLogFiles []string
+}
+
+// Audit modes accepted by Parameters.AuditMode.
+const (
+	AuditModeEBPF   = "ebpf"
+	AuditModeAuditd = "auditd"
+	AuditModeBoth   = "both"
+	AuditModeOff    = "off"
+
+	// DefaultAuditLogPath is used in auditd mode when no --audit-log is given.
+	DefaultAuditLogPath = "/var/log/audit/audit.log"
+)
+
+// ResolveAuditMode returns the effective, validated audit mode.
+func (p Parameters) ResolveAuditMode() (string, error) {
+	mode := strings.ToLower(strings.TrimSpace(p.AuditMode))
+	switch mode {
+	case "":
+		if len(p.AuditLogFiles) > 0 {
+			// Before --audit-mode existed, --audit-log alone meant "tail
+			// these auditd logs": keep existing deployments working.
+			return AuditModeAuditd, nil
+		}
+		return AuditModeEBPF, nil
+	case AuditModeEBPF, AuditModeAuditd, AuditModeBoth, AuditModeOff:
+		return mode, nil
+	}
+	return "", fmt.Errorf("--audit-mode must be one of: ebpf, auditd, both, off (got %q)", p.AuditMode)
 }
 
 // DefaultParameters returns parameters with sensible defaults.

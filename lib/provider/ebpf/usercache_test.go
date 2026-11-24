@@ -11,11 +11,8 @@ func TestNewUserCacheSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewUserCache(100) error = %v", err)
 	}
-	if cache == nil {
-		t.Fatal("NewUserCache(100) returned nil")
-	}
-	if cache.cache == nil {
-		t.Fatal("NewUserCache(100).cache is nil")
+	if cache == nil || cache.cache == nil {
+		t.Fatal("NewUserCache(100) returned a nil cache")
 	}
 }
 

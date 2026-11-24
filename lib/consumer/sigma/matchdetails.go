@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	sigmaengine "github.com/markuskont/go-sigma-rule-engine"
 	"github.com/Nextron-Labs/aurora-linux/lib/provider"
+	sigmaengine "github.com/markuskont/go-sigma-rule-engine"
 	log "github.com/sirupsen/logrus"
 	yaml "gopkg.in/yaml.v2"
 )

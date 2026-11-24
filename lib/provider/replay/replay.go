@@ -13,6 +13,7 @@ import (
 
 	"github.com/Nextron-Labs/aurora-linux/lib/enrichment"
 	"github.com/Nextron-Labs/aurora-linux/lib/provider"
+	"github.com/Nextron-Labs/aurora-linux/lib/provider/syslog"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -251,3 +252,19 @@ func (e *replayEvent) Time() time.Time                             { return e.ts
 func (e *replayEvent) Value(fieldname string) enrichment.DataValue { return e.fields.Value(fieldname) }
 func (e *replayEvent) ForEach(fn func(key, value string))          { e.fields.ForEach(fn) }
 func (e *replayEvent) Fields() enrichment.DataFieldsMap            { return e.fields }
+
+// Services implements logsource routing for replayed audit and syslog
+// events, so service-specific Sigma rules still run on replays.
+func (e *replayEvent) Services() []string {
+	switch e.id.ProviderName {
+	case "LinuxAudit":
+		return []string{"auditd"}
+	case "LinuxSyslog":
+		// Same routing as live syslog events (sshd/auth/sudo/cron rules).
+		return syslog.ServicesFor(e.fields.Value("program").String, e.fields.Value("facility").String)
+	}
+	if e.source == "LinuxEBPF:Audit" {
+		return []string{"auditd"}
+	}
+	return nil
+}

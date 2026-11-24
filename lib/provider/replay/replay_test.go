@@ -462,3 +462,19 @@ func TestDefaultSourceForEventUnknown(t *testing.T) {
 		t.Fatalf("defaultSourceForEvent(LinuxEBPF, 99) = %q, want empty", got)
 	}
 }
+
+func TestReplayedSyslogRoutesLikeLive(t *testing.T) {
+	evt, err := recordToEvent(map[string]interface{}{
+		"_provider": "LinuxSyslog", "_eventID": float64(100),
+		"program": "sshd", "facility": "authpriv", "message": "Failed password for root",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(evt.Services(), ",")
+	for _, want := range []string{"syslog", "sshd", "auth"} {
+		if !strings.Contains(","+got+",", ","+want+",") {
+			t.Fatalf("services = %s, missing %s", got, want)
+		}
+	}
+}
