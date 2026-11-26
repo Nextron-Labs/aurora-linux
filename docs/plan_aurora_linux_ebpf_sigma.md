@@ -194,7 +194,7 @@ type DataFieldsMap map[string]fmt.Stringer
 | Dependency | Purpose |
 |---|---|
 | `github.com/cilium/ebpf` (v0.12+) | Pure-Go eBPF: load BPF programs, read ring buffer, manage maps. No CGO. CO-RE via BTF. Used in Cilium, Tetragon, Falco. |
-| `github.com/markuskont/go-sigma-rule-engine` | Sigma rule parsing and matching (public dependency). |
+| `third_party/go-sigma-rule-engine` | Sigma rule parsing and matching: vendored copy of `github.com/markuskont/go-sigma-rule-engine` v0.3.0 with a case-sensitivity patch. |
 | `github.com/sirupsen/logrus` | Structured logging to JSON/text output sinks. |
 | `github.com/spf13/cobra` | CLI framework for command-line flags and subcommands. |
 | `github.com/hashicorp/golang-lru/v2` | LRU cache for UID→username mapping and parent process correlation. |

@@ -253,7 +253,7 @@ Internal: `SourceIp`, `SourcePort`, `User`, `ProcessId`, `Protocol`.
 | Package | Import Path | Purpose |
 |---------|------------|---------|
 | cilium/ebpf v0.22 | `github.com/cilium/ebpf` | Pure-Go eBPF: load BPF programs, ring buffer, maps. No CGO. |
-| go-sigma-rule-engine v0.3 | `github.com/markuskont/go-sigma-rule-engine` | Sigma rule parsing and evaluation. Public, Apache-2.0. |
+| go-sigma-rule-engine v0.3 | `third_party/go-sigma-rule-engine` | Sigma rule parsing and evaluation. Vendored copy of `github.com/markuskont/go-sigma-rule-engine` with a case-sensitivity patch. Apache-2.0. |
 | logrus v1.9 | `github.com/sirupsen/logrus` | Structured logging. |
 | cobra v1.10 | `github.com/spf13/cobra` | CLI framework. |
 | golang-lru/v2 v2.0 | `github.com/hashicorp/golang-lru/v2` | LRU caches (correlator + user cache). |
@@ -262,8 +262,8 @@ Internal: `SourceIp`, `SourcePort`, `User`, `ProcessId`, `Protocol`.
 ### Important: Sigma library choice
 
 The original plan specified `github.com/NextronSystems/go-sigma/v2`, but that
-is a **private** repository. We use `github.com/markuskont/go-sigma-rule-engine`
-instead. Its event interface requires two methods:
+is a **private** repository. We use a vendored copy of
+`github.com/markuskont/go-sigma-rule-engine` instead (see below). Its event interface requires two methods:
 
 ```go
 Select(key string) (interface{}, bool)   // key-value field lookup
@@ -430,13 +430,21 @@ per-program services such as `sshd`). Rules without a service see every event.
 `Config.LogsourceServices` tells the consumer which services are collected;
 rules for others are excluded at startup.
 
-### Sigma engine (`github.com/markuskont/go-sigma-rule-engine` v0.3.0, unpatched)
+### Sigma engine (`third_party/go-sigma-rule-engine`, upstream v0.3.0 + case patch)
 
-The upstream module is used as-is. Known gaps compared with Sigma semantics:
+The engine is vendored as an in-repo package (no `replace` directive). It is
+upstream v0.3.0 with a case-sensitivity patch, detailed in its README: string
+matching is case-insensitive (ASCII-only folding) as the Sigma specification
+requires, `|cased` restores case-sensitive matching, `|re|i`, `|re|m`, `|re|s`
+become Go inline regex flags, and values written as `/.../` are plain values
+instead of upstream's case-sensitive regex shortcut. `newRuleFieldPattern` in `matchdetails.go` mirrors these
+rules for match evidence; keep the two in sync.
+
+Remaining gaps compared with Sigma semantics:
 rules using `|all` keyword maps, integer keywords, `selection_*` keyword lists or
 `---` inside a reference URL fail to load (counted in the "failed"/"unsupported"
 startup log fields); `selection and not filter` does not match when the event
-lacks the filter field; matching is case-sensitive. Rules excluded by logsource
+lacks the filter field. Rules excluded by logsource
 (product/service) are reported at startup; `--strict-rules` fails startup on
 any excluded or unloadable rule.
 
@@ -516,7 +524,7 @@ misattributed.
 ### Why markuskont/go-sigma-rule-engine and not NextronSystems/go-sigma/v2?
 
 - go-sigma/v2 is **private** -- cannot be used as a public dependency.
-- go-sigma-rule-engine is public (Apache-2.0); upstream has been inactive since September 2023.
+- go-sigma-rule-engine is public (Apache-2.0); upstream has been inactive since September 2023, so Aurora carries a patched copy in `third_party/`.
 - Its API is different: `Select(key)` + `Keywords()` instead of `GetField(key)`.
 
 ### Why correlator caches process data in two places?

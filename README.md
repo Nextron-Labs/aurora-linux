@@ -74,7 +74,7 @@ Known differences from a real auditd:
 - `Special File Creation via Mknod Syscall` fires for every FIFO `dockerd` creates for container stdio (as it would with auditd's `-S mknod`); expect it on Docker hosts.
 - In other containers only writes/creations of exactly-named watched files are seen (no reads, no wildcard names such as `/etc/systemd/system/*.service`).
 - A few upstream rules are inherently noisy on a real host: `System Shutdown/Reboot` fires on `runc init` run as root (it matches `init` plus any value equal to `0`), and `Use Of Hidden Paths Or Files` matches any watched `/.` path (e.g. `~/.bashrc` edits), exactly as with auditd.
-- Aurora uses upstream `go-sigma-rule-engine` v0.3.0 unpatched. Known limitations: a few SigmaHQ Linux rules (about 6%: `|all` keyword maps, integer keywords, `selection_*` keyword lists, `---` inside a reference URL) fail to load; a `selection and not filter` rule never fires when the event lacks the filter field; and string matching is case-sensitive.
+- Aurora vendors `go-sigma-rule-engine` v0.3.0 in `third_party/`, patched so that string matching is case-insensitive as Sigma requires (`|cased` and `|re|i/m/s` are supported). Known limitations: a few SigmaHQ Linux rules (about 6%: `|all` keyword maps, integer keywords, `selection_*` keyword lists, `---` inside a reference URL) fail to load, and a `selection and not filter` rule never fires when the event lacks the filter field.
 
 ### Optional: syslog / journald input
 
@@ -396,7 +396,7 @@ Aurora Linux follows a **provider → distributor → consumer** pipeline:
 - **Provider: Syslog** (`lib/provider/syslog/`, optional `--syslog-log` / `--syslog-journal`) -- tails syslog files and journald and feeds the Sigma `linux/builtin` service rules.
 - **Provider: Audit** (`lib/provider/audit/`, legacy `--audit-mode auditd`) -- Reads Linux audit logs (e.g. `/var/log/audit/audit.log`), groups multi-line records by audit serial, and emits events with raw audit fields for direct SigmaHQ rule compatibility. Supports real-time tailing that follows the log across rotation and truncation; a record is emitted about a second after its last line, so that all of its lines stay together.
 - **Distributor** (`lib/distributor/`) -- Applies enrichment functions (parent process correlation via LRU cache, UID→username resolution) and routes events to consumers.
-- **Consumer** (`lib/consumer/sigma/`) -- Evaluates events against loaded Sigma rules using [go-sigma-rule-engine](https://github.com/markuskont/go-sigma-rule-engine). Includes per-rule throttling to suppress duplicate alerts.
+- **Consumer** (`lib/consumer/sigma/`) -- Evaluates events against loaded Sigma rules using a vendored, patched copy of [go-sigma-rule-engine](https://github.com/markuskont/go-sigma-rule-engine) (`third_party/go-sigma-rule-engine`). Includes per-rule throttling to suppress duplicate alerts.
 - **Consumer** (`lib/consumer/ioc/`) -- Evaluates events against bundled IOC files (`filename-iocs.txt`, `c2-iocs.txt`) and emits IOC match alerts.
 
 ### Sigma Field Coverage

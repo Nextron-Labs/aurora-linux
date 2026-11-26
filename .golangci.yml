@@ -75,6 +75,7 @@ linters:
     paths:
       - builtin$
       - examples$
+      - third_party/
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
@@ -89,4 +90,5 @@ formatters:
     paths:
       - builtin$
       - examples$
+      - third_party/
       - \.go$
