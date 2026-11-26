@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/Nextron-Labs/aurora-linux/lib/provider"
-	sigma "github.com/markuskont/go-sigma-rule-engine"
+	sigma "github.com/Nextron-Labs/aurora-linux/third_party/go-sigma-rule-engine"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/time/rate"
 )

@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/Nextron-Labs/aurora-linux/lib/provider"
-	sigmaengine "github.com/markuskont/go-sigma-rule-engine"
+	sigmaengine "github.com/Nextron-Labs/aurora-linux/third_party/go-sigma-rule-engine"
 	log "github.com/sirupsen/logrus"
 	yaml "gopkg.in/yaml.v2"
 )
@@ -579,7 +579,24 @@ func newRuleFieldPattern(modifiers []string, pattern string, noCollapseWS bool) 
 	}
 
 	modifier, all := textPatternFromModifiers(modifiers)
-	matcher, err := sigmaengine.NewStringMatcher(modifier, false, all, noCollapseWS, pattern)
+	// Same semantics as the engine: case-insensitive unless |cased, and the
+	// |re|i, |re|m, |re|s flags become inline regex flags.
+	lower := true
+	reFlags := ""
+	for _, cur := range modifiers {
+		switch m := strings.ToLower(strings.TrimSpace(cur)); m {
+		case "cased":
+			lower = false
+		case "i", "m", "s":
+			if !strings.Contains(reFlags, m) {
+				reFlags += m
+			}
+		}
+	}
+	if modifier == sigmaengine.TextPatternRegex && reFlags != "" {
+		pattern = "(?" + reFlags + ")" + pattern
+	}
+	matcher, err := sigmaengine.NewStringMatcher(modifier, lower, all, noCollapseWS, pattern)
 	if err == nil {
 		p.Matcher = matcher
 	}

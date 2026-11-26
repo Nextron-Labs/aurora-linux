@@ -21,16 +21,14 @@ import (
 // The rule directory defaults to ~/sigma/rules/linux/auditd and can be
 // overridden with AURORA_SIGMA_AUDITD_RULES. The tests skip if it is absent.
 
-// upstreamEngineGaps lists SigmaHQ auditd rules that the unpatched upstream
-// go-sigma-rule-engine v0.3.0 cannot evaluate on these scenarios (rule fails
-// to load, or relies on case-insensitive matching). They are not required to
+// upstreamEngineGaps lists SigmaHQ auditd rules that the vendored engine
+// (upstream go-sigma-rule-engine v0.3.0 plus the case-sensitivity patch)
+// cannot evaluate on these scenarios. They are not required to
 // trigger; if the engine ever handles them the test just logs it.
 var upstreamEngineGaps = map[string]bool{
 	"binary_padding":         true,
-	"data_compressed":        true,
 	"find_cred_in_files":     true,
 	"masquerading_crond":     true,
-	"network_sniffing":       true,
 	"screencaputre_xwd":      true,
 	"system_shutdown_reboot": true,
 	"system_info_discovery2": true,

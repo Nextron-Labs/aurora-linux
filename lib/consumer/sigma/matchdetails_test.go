@@ -4,7 +4,7 @@ import (
 	"sort"
 	"testing"
 
-	sigmaengine "github.com/markuskont/go-sigma-rule-engine"
+	sigmaengine "github.com/Nextron-Labs/aurora-linux/third_party/go-sigma-rule-engine"
 )
 
 func TestParseFieldSelector(t *testing.T) {

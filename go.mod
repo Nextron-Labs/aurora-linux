@@ -4,8 +4,9 @@ go 1.25.0
 
 require (
 	github.com/cilium/ebpf v0.22.0
+	github.com/gobwas/glob v0.2.3
 	github.com/hashicorp/golang-lru/v2 v2.0.7
-	github.com/markuskont/go-sigma-rule-engine v0.3.0
+	github.com/markuskont/datamodels v0.1.1
 	github.com/sirupsen/logrus v1.9.4
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
@@ -15,7 +16,7 @@ require (
 )
 
 require (
-	github.com/gobwas/glob v0.2.3 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
-	github.com/markuskont/datamodels v0.1.1 // indirect
+	github.com/niemeyer/pretty v0.0.0-20200227124842-a10e7caefd8e // indirect
+	gopkg.in/check.v1 v1.0.0-20200227125254-8fa46927fb4f // indirect
 )
